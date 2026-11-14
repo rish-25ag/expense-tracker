@@ -5,6 +5,7 @@ import { formatINR, parseAmount, splitEqually } from './money.ts';
 import { parseDate, addMonths } from './dates.ts';
 import { parseCSV, toCSV, parseExpenseCSV } from './csv.ts';
 import { balances, myShare, validateShares } from './split.ts';
+import { buildReview, type StatementTxn } from './statementReview.ts';
 
 test('formatINR uses Indian digit grouping', () => {
   assert.equal(formatINR(1234567), '₹12,34,567');
@@ -86,4 +87,31 @@ test('balances: I paid, they paid, settlements', () => {
 test('validateShares', () => {
   assert.equal(validateShares(100, [{ amount: 50 }, { amount: 50 }]), null);
   assert.match(validateShares(100, [{ amount: 50 }])!, /add up/);
+});
+
+
+test('statement review: debits only, transfers and duplicates unselected', () => {
+  const t = (date: string, amount: number, extra: Partial<StatementTxn> = {}): StatementTxn => ({
+    date, amount, description: 'x', direction: 'debit', kind: 'spend', category: 'Other', ...extra,
+  });
+  const r = buildReview(
+    [
+      t('2026-11-01', 485),
+      t('2026-11-02', 85000, { direction: 'credit' }),
+      t('2026-11-04', 18200, { kind: 'transfer' }),
+      t('2026-11-05', 50),
+      t('2026-11-05', 50), // second identical tea; only one exists already
+    ],
+    [{ date: '2026-11-05', amount: 50 }],
+  );
+  assert.equal(r.creditsSkipped, 1);
+  assert.deepEqual(
+    r.rows.map((x) => [x.date, x.amount, x.selected, x.duplicate]),
+    [
+      ['2026-11-05', 50, false, true],
+      ['2026-11-05', 50, true, false],
+      ['2026-11-04', 18200, false, false],
+      ['2026-11-01', 485, true, false],
+    ],
+  );
 });

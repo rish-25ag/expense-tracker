@@ -35,6 +35,7 @@ export default function RootLayout() {
             <Stack.Screen name="person/[id]" options={{ title: '' }} />
             <Stack.Screen name="categories" options={{ title: 'Categories' }} />
             <Stack.Screen name="login" options={{ presentation: 'modal', title: 'Account' }} />
+            <Stack.Screen name="statement" options={{ title: 'Import statement' }} />
           </Stack>
         </AppProvider>
       </SQLiteProvider>

@@ -110,6 +110,13 @@ export default function SettingsScreen() {
 
       <SectionTitle>Data</SectionTitle>
       <Card>
+        <Button title="Import bank statement (PDF)" onPress={() => router.push('/statement')} disabled={busy} />
+        <Text style={styles.muted}>
+          AI reads a bank or credit card statement PDF, including password-protected ones, and lets you review the
+          debits before adding them. Needs sign-in.
+        </Text>
+      </Card>
+      <Card>
         <Button title="Export to CSV" variant="secondary" onPress={doExport} disabled={busy} />
         <Button title="Import from CSV" variant="secondary" onPress={doImport} disabled={busy} />
         <Text style={styles.muted}>
