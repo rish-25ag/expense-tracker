@@ -118,8 +118,8 @@ export default function SettingsScreen() {
       <Card>
         <Button title="Import bank statement (PDF)" onPress={() => router.push('/statement')} disabled={busy} />
         <Text style={styles.muted}>
-          AI reads a bank or credit card statement PDF, including password-protected ones, and lets you review the
-          debits before adding them. Needs sign-in.
+          Reads a bank or credit card statement PDF, including password-protected ones, and lets you review the debits
+          before adding them. Free. Needs sign-in.
         </Text>
       </Card>
       <Card>

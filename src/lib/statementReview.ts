@@ -1,10 +1,12 @@
-/** A transaction as returned by the parse-statement Edge Function. */
+/** A transaction read from a statement (see statementParser.ts). */
 export interface StatementTxn {
   date: string;
   description: string;
   amount: number;
   direction: 'debit' | 'credit';
+  /** spend = a real expense; transfer = card bill payment, own-account transfer, investment, EMI. */
   kind: 'spend' | 'transfer';
+  /** Category id, e.g. cat_food. */
   category: string;
 }
 

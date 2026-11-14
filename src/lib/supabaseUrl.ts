@@ -16,7 +16,11 @@ export function supabaseUrlProblem(url: string | undefined): string | null {
   } catch {
     return `EXPO_PUBLIC_SUPABASE_URL is not a valid URL: "${u}". It should look like https://abcdefghijklmnop.supabase.co`;
   }
-  if (parsed.protocol !== 'https:') return 'EXPO_PUBLIC_SUPABASE_URL must start with https://';
+  // http is fine only for a local Supabase (npx supabase start) on this machine or network.
+  const local = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && local)) {
+    return 'EXPO_PUBLIC_SUPABASE_URL must start with https://';
+  }
   if (parsed.hostname.includes('supabase.com')) {
     return 'EXPO_PUBLIC_SUPABASE_URL is the dashboard address. Use the Project URL from Project Settings → API (it ends in .supabase.co).';
   }

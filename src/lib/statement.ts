@@ -3,6 +3,7 @@ import { File } from 'expo-file-system';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import type { StatementTxn } from './statementReview';
+import { parseStatementText } from './statementParser';
 
 export const MAX_PDF_MB = 10;
 
@@ -32,10 +33,9 @@ export type ParseErrorCode =
   | 'wrong_password'
   | 'unreadable_pdf'
   | 'no_text'
-  | 'ai_refused'
-  | 'ai_failed'
+  | 'no_transactions'
+  | 'server_error'
   | 'unauthorized'
-  | 'forbidden'
   | 'bad_request'
   | 'not_deployed'
   | 'network';
@@ -52,29 +52,37 @@ export class ParseError extends Error {
 export interface ParsedStatement {
   transactions: StatementTxn[];
   pages: number;
-  dropped: number;
 }
 
-/** Sends the PDF to the parse-statement Edge Function, which reads it with Claude. */
-export async function parseStatementPdf(
-  pdfBase64: string,
-  password: string | undefined,
-  categories: string[],
-): Promise<ParsedStatement> {
+/**
+ * Sends the PDF to the parse-statement Edge Function, which unlocks it and
+ * returns its text, then reads the transactions out of that text with rules
+ * (src/lib/statementParser.ts). No AI is involved, so there is no cost.
+ */
+export async function parseStatementPdf(pdfBase64: string, password: string | undefined): Promise<ParsedStatement> {
   if (!supabase) throw new ParseError('unauthorized', 'Cloud sync is not set up in this build.');
-  const { data, error } = await supabase.functions.invoke<ParsedStatement>('parse-statement', {
-    body: { pdfBase64, password, categories },
+  const { data, error } = await supabase.functions.invoke<{ pages: string[] }>('parse-statement', {
+    body: { pdfBase64, password },
   });
-  if (!error && data) return data;
-
-  if (error instanceof FunctionsHttpError) {
-    const res = error.context as Response;
-    const body = await res.json().catch(() => null);
-    if (body?.error) throw new ParseError(body.error, body.message ?? 'Could not read the statement.');
-    if (res.status === 404) {
-      throw new ParseError('not_deployed', 'The statement reader is not deployed yet. See README → “Statement PDF import”.');
+  if (error) {
+    if (error instanceof FunctionsHttpError) {
+      const res = error.context as Response;
+      const body = await res.json().catch(() => null);
+      if (body?.error) throw new ParseError(body.error, body.message ?? 'Could not read the statement.');
+      if (res.status === 404) {
+        throw new ParseError('not_deployed', 'The statement reader is not deployed yet. See README → “Statement PDF import”.');
+      }
+      throw new ParseError('server_error', `Server error (${res.status}).`);
     }
-    throw new ParseError('ai_failed', `Server error (${res.status}).`);
+    throw new ParseError('network', 'Could not reach the server. Check your internet connection.');
   }
-  throw new ParseError('network', 'Could not reach the server. Check your internet connection.');
+  const pages = data?.pages ?? [];
+  const { transactions } = parseStatementText(pages);
+  if (!transactions.length) {
+    throw new ParseError(
+      'no_transactions',
+      'No transactions were recognised in this statement. Its layout may not be supported yet — tell the developer which bank it is from.',
+    );
+  }
+  return { transactions, pages: pages.length };
 }

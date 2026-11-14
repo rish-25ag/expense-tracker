@@ -22,11 +22,11 @@ export default function StatementImportScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<ReviewRow[]>([]);
-  const [summary, setSummary] = useState({ creditsSkipped: 0, pages: 0, dropped: 0 });
+  const [summary, setSummary] = useState({ creditsSkipped: 0, pages: 0 });
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const catByName = useMemo(() => Object.fromEntries(categories.map((c) => [c.name, c])), [categories]);
+  const catById = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c])), [categories]);
   const selected = rows.filter((r) => r.selected);
   const selectedTotal = round2(selected.reduce((a, r) => a + r.amount, 0));
 
@@ -34,10 +34,10 @@ export default function StatementImportScreen() {
     setError(null);
     setStep('reading');
     try {
-      const res = await parseStatementPdf(file.base64, pw, categories.map((c) => c.name));
+      const res = await parseStatementPdf(file.base64, pw);
       const review = buildReview(res.transactions, await listExpenses(db));
       setRows(review.rows);
-      setSummary({ creditsSkipped: review.creditsSkipped, pages: res.pages, dropped: res.dropped });
+      setSummary({ creditsSkipped: review.creditsSkipped, pages: res.pages });
       setStep('review');
     } catch (e) {
       if (e instanceof ParseError && (e.code === 'password_required' || e.code === 'wrong_password')) {
@@ -72,12 +72,12 @@ export default function StatementImportScreen() {
   const importSelected = async () => {
     setSaving(true);
     try {
-      const other = categories.find((c) => c.id === 'cat_other')?.id ?? null;
+      const other = catById.cat_other?.id ?? null;
       await db.withTransactionAsync(async () => {
         for (const r of selected) {
           await saveExpense(db, {
             amount: r.amount,
-            categoryId: catByName[r.category]?.id ?? other,
+            categoryId: catById[r.category]?.id ?? other,
             note: r.description,
             date: r.date,
             paidBy: ME,
@@ -112,7 +112,7 @@ export default function StatementImportScreen() {
       <View style={[styles.screen, { alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }]}>
         <ActivityIndicator size="large" color={colors.primary} />
         <Text style={{ fontSize: 16, fontWeight: '600' }}>Reading your statement…</Text>
-        <Text style={[styles.muted, { textAlign: 'center' }]}>This usually takes 20–60 seconds. Keep the app open.</Text>
+        <Text style={[styles.muted, { textAlign: 'center' }]}>This takes a few seconds.</Text>
       </View>
     );
   }
@@ -134,7 +134,6 @@ export default function StatementImportScreen() {
                   Credits (salary, refunds, payments received) are skipped
                   {summary.creditsSkipped ? `: ${summary.creditsSkipped} skipped` : ''}. Transfers and possible duplicates
                   start unticked. Tap a category to change it.
-                  {summary.dropped ? ` ${summary.dropped} unreadable row(s) were left out.` : ''}
                 </Text>
                 <View style={{ flexDirection: 'row', gap: 8 }}>
                   <Chip label="Select all" onPress={() => setAll(true)} />
@@ -144,7 +143,7 @@ export default function StatementImportScreen() {
             </View>
           }
           renderItem={({ item: r }) => {
-            const cat = catByName[r.category] ?? catByName.Other;
+            const cat = catById[r.category] ?? catById.cat_other;
             return (
               <Card style={{ paddingVertical: 12, opacity: r.selected ? 1 : 0.6 }}>
                 <Pressable onPress={() => toggle(r.key)} style={styles.row} accessibilityRole="checkbox" accessibilityState={{ checked: r.selected }}>
@@ -170,7 +169,7 @@ export default function StatementImportScreen() {
                 </Pressable>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
                   <Chip
-                    label={`${cat?.icon ?? '📦'} ${r.category}`}
+                    label={`${cat?.icon ?? '📦'} ${cat?.name ?? 'Other'}`}
                     selected={editingKey === r.key}
                     onPress={() => setEditingKey(editingKey === r.key ? null : r.key)}
                   />
@@ -184,8 +183,8 @@ export default function StatementImportScreen() {
                         key={c.id}
                         label={`${c.icon} ${c.name}`}
                         color={c.color}
-                        selected={c.name === r.category}
-                        onPress={() => setCategory(r.key, c.name)}
+                        selected={c.id === (cat?.id ?? r.category)}
+                        onPress={() => setCategory(r.key, c.id)}
                       />
                     ))}
                   </View>
@@ -232,14 +231,14 @@ export default function StatementImportScreen() {
         <Card>
           <Text style={{ fontSize: 16, fontWeight: '600' }}>Import a bank or credit card statement</Text>
           <Text style={styles.muted}>
-            Pick the PDF your bank emails you or that you download from net banking. AI reads every transaction, and you
-            review them before anything is added. Only debits are imported.
+            Pick the PDF your bank emails you or that you download from net banking. The app reads every transaction and
+            you review them before anything is added. Only debits are imported. Free: no AI is used.
           </Text>
           {error ? <Text style={{ color: colors.danger }}>{error}</Text> : null}
           <Button title="Choose PDF" onPress={choose} />
           <Text style={styles.muted}>
-            Privacy: the PDF and its password go to your own Supabase server, which unlocks it and sends the statement
-            text to Anthropic’s Claude API to read. Your server doesn’t save the file or the password.
+            Privacy: the PDF and its password go only to your own Supabase server, which unlocks it and sends the text
+            back. It doesn’t save the file or the password.
           </Text>
         </Card>
       )}
