@@ -127,35 +127,45 @@ Dates like `13/11/2026`, `13-11-26`, `13 Nov 2026` and `2026-11-13` are read day
 
 Many banks only offer XLS/PDF statements. Open the XLS in Google Sheets or Excel and use **File → Download → CSV**.
 
-## Install it on your Android phone (no laptop needed afterwards)
+## Use it without your laptop (Expo Go, free)
 
-Expo builds an **.apk** in its cloud that you install like any other app. After that, code changes reach the phone as over-the-air updates, with no reinstall needed. Expo Go can't open published updates, so this build is the way to use the app without running `npx expo start`. The build profiles are in `eas.json`; `preview` makes the installable APK.
+Publish the app to your Expo account once, and Expo Go can open it any time, with your laptop off and on any network. This is the same setup as the Steady routine app.
 
-Run these from the project folder on your computer. You need a free account at [expo.dev](https://expo.dev).
+One-time setup, in the `expense-tracker` folder:
 
-1. Log in to Expo:
+1. Log in to Expo. If it says `EXPO_TOKEN is set`, see the login note below.
 
    ```bash
    npx eas-cli@latest login
    ```
 
-2. Create the project on your Expo account. This adds its id to `app.json`; commit that change:
+2. Link the project to your Expo account, answering **Y** to the prompts:
 
    ```bash
    npx eas-cli@latest init
-   ```
-
-3. Set up over-the-air updates (adds `expo-updates`, `runtimeVersion` and the update URL to the app config):
-
-   ```bash
-   npx expo install expo-updates
    ```
 
    ```bash
    npx eas-cli@latest update:configure
    ```
 
-4. Give the cloud build your Supabase settings. Your `.env` file isn't uploaded to Expo, so the build needs these two values. Use the same values as in `.env`, and only the publishable / anon key, never the secret key:
+   These add the project id and update settings to `app.json`. Commit that change.
+
+**Publish** (run this again whenever the app changes, e.g. after `git pull`):
+
+```bash
+npm run publish-app
+```
+
+It bundles the app on your computer, so the Supabase settings come from your `.env` file, then uploads it to Expo. Then open it on your phone: the command prints an **EAS Dashboard** link. Open it, or go to expo.dev → your project → **Updates**, open the latest update and use **Preview** to open it in Expo Go, signed in to the same Expo account as on the laptop. After the first open, the app stays in Expo Go's recent list.
+
+**Login note (Windows):** `EXPO_TOKEN is set in your environment` means a saved token is used instead of logging in. Remove it with `Remove-Item Env:EXPO_TOKEN` (this window) and `[Environment]::SetEnvironmentVariable("EXPO_TOKEN", $null, "User")` (future windows), then run the login again.
+
+### Alternative: an installable Android app (APK)
+
+If you'd rather have the app on your home screen, outside Expo Go, Expo can build an **.apk** in its cloud. Profiles are in `eas.json`; `preview` makes the APK. After the one-time setup above:
+
+1. The cloud build doesn't get your `.env` file, so store the two Supabase values in Expo (publishable / anon key only, never the secret key):
 
    ```bash
    npx eas-cli@latest env:set --name EXPO_PUBLIC_SUPABASE_URL --value https://<project-ref>.supabase.co --environment preview --visibility plaintext
@@ -165,23 +175,15 @@ Run these from the project folder on your computer. You need a free account at [
    npx eas-cli@latest env:set --name EXPO_PUBLIC_SUPABASE_ANON_KEY --value <publishable-or-anon-key> --environment preview --visibility plaintext
    ```
 
-5. Build the APK (takes about 10–20 minutes in Expo's cloud). When it asks to generate an Android keystore, answer **yes**; Expo stores it for you.
+2. Build it (about 10–20 minutes), answering **yes** to creating an Android keystore:
 
    ```bash
    npx eas-cli@latest build --platform android --profile preview
    ```
 
-6. Open the link it prints (or scan its QR code) on your phone, download the APK and install it. Android asks once to allow installing apps from your browser.
+3. Open the printed link on your phone, download the APK and install it. Later changes reach it with `npx eas-cli@latest update --channel preview --environment preview --message "…"`.
 
-**Sending later changes to the phone:** after `git pull` (or your own edits), publish an update. The installed app downloads it the next time it's opened, and uses it after a restart:
-
-```bash
-npx eas-cli@latest update --channel preview --environment preview --message "describe the change"
-```
-
-You only need a new build (step 5) if a native library is added or the Expo SDK version changes.
-
-**iPhone:** Apple requires a paid Apple Developer account ($99/year) to install your own app. With one, run the same steps with `--platform ios`.
+**iPhone:** an installable iPhone app needs a paid Apple Developer account ($99/year); Expo Go (above) doesn't.
 
 ## Development
 

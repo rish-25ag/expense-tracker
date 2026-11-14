@@ -32,6 +32,9 @@
     "scheme": "expensetracker",
     "experiments": {
       "typedRoutes": false
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
