@@ -7,7 +7,7 @@ import { parseCSV, toCSV, parseExpenseCSV } from './csv.ts';
 import { balances, myShare, validateShares } from './split.ts';
 import { buildReview, type StatementTxn } from './statementReview.ts';
 import { supabaseHost, supabaseUrlProblem } from './supabaseUrl.ts';
-import { classify, parseStatementText, statementEndDate } from './statementParser.ts';
+import { classify, detectAccount, parseStatementText, statementEndDate } from './statementParser.ts';
 
 test('formatINR uses Indian digit grouping', () => {
   assert.equal(formatINR(1234567), '₹12,34,567');
@@ -92,28 +92,35 @@ test('validateShares', () => {
 });
 
 
-test('statement review: debits only, transfers and duplicates unselected', () => {
+test('statement review: debits -> expenses, credits -> credits; transfers and duplicates unselected', () => {
   const t = (date: string, amount: number, extra: Partial<StatementTxn> = {}): StatementTxn => ({
-    date, amount, description: 'x', direction: 'debit', kind: 'spend', category: 'Other', ...extra,
+    date, amount, description: 'x', direction: 'debit', kind: 'spend', category: 'cat_other', ...extra,
   });
   const r = buildReview(
     [
       t('2026-11-01', 485),
       t('2026-11-02', 85000, { direction: 'credit' }),
+      t('2026-11-03', 299, { direction: 'credit' }), // refund; an expense of 299 exists but that's a different type
       t('2026-11-04', 18200, { kind: 'transfer' }),
       t('2026-11-05', 50),
       t('2026-11-05', 50), // second identical tea; only one exists already
     ],
-    [{ date: '2026-11-05', amount: 50 }],
-  );
-  assert.equal(r.creditsSkipped, 1);
-  assert.deepEqual(
-    r.rows.map((x) => [x.date, x.amount, x.selected, x.duplicate]),
     [
-      ['2026-11-05', 50, false, true],
-      ['2026-11-05', 50, true, false],
-      ['2026-11-04', 18200, false, false],
-      ['2026-11-01', 485, true, false],
+      { date: '2026-11-05', amount: 50, type: 'expense' },
+      { date: '2026-11-03', amount: 299, type: 'expense' },
+    ],
+  );
+  assert.equal(r.debits, 4);
+  assert.equal(r.credits, 2);
+  assert.deepEqual(
+    r.rows.map((x) => [x.date, x.amount, x.type, x.selected, x.duplicate]),
+    [
+      ['2026-11-05', 50, 'expense', false, true],
+      ['2026-11-05', 50, 'expense', true, false],
+      ['2026-11-04', 18200, 'expense', false, false],
+      ['2026-11-03', 299, 'credit', true, false],
+      ['2026-11-02', 85000, 'credit', true, false],
+      ['2026-11-01', 485, 'expense', true, false],
     ],
   );
 });
@@ -156,7 +163,7 @@ test('statement parser: credit card layout (HSBC style)', () => {
   assert.deepEqual(
     r.transactions.map((t) => [t.date, t.amount, t.direction, t.description, t.category, t.kind]),
     [
-      ['2026-12-26', 20000, 'credit', 'Card payment', 'cat_other', 'transfer'],
+      ['2026-12-26', 20000, 'credit', 'Card bill payment', 'cat_other', 'transfer'],
       ['2026-12-23', 168, 'debit', 'Blinkit', 'cat_groceries', 'spend'],
       ['2026-12-24', 95, 'credit', 'Swiggy Instamart', 'cat_groceries', 'spend'],
       ['2026-12-28', 1500.5, 'debit', 'Zomato', 'cat_food', 'spend'],
@@ -203,4 +210,94 @@ test('statement parser: merchant names and categories', () => {
   assert.equal(classify('CAS*CITY PHARMA RETAIL MUMBAI   IND').category, 'cat_health');
   assert.equal(classify('ZERODHA BROKING SIP').transfer, true);
   assert.equal(classify('Some Unknown Shop  PUNE  IND').description, 'Some Unknown Shop');
+});
+
+// Synthetic layouts modelled on other banks' card statements (invented data).
+const sumOf = (r: ReturnType<typeof parseStatementText>, dir: 'debit' | 'credit') =>
+  r.transactions.filter((t) => t.direction === dir).reduce((a, t) => a + t.amount, 0).toFixed(2);
+
+test('statement parser: Axis style — amount column chosen over the cashback column, Dr/Cr marks', () => {
+  const page = [
+    '                                                               Flipkart Axis Bank Credit Card Statement',
+    '          15/09/2026 - 13/10/2026',
+    '           DATE                       TRANSACTION DETAILS                    MERCHANT CATEGORY      AMOUNT (Rs.)    CASHBACK EARNED',
+    '        Card No:          411111******1111                                 Name    Test User',
+    '        18/09/2026  PPSL*MYNTRA DESIGNS PR,KARNATAKA                       CLOTH STORES                   1,000.00 Dr       75.00 Cr',
+    '        27/09/2026  FLIPKART PAYMENTS,GURGAON                              MISC STORE                       20.00 Dr        0.00 Cr',
+    '        30/09/2026  BBPS PAYMENT RECEIVED - AB12CD34EF                                                    5,000.00 Cr       0.00 Dr',
+    '        01/10/2026  FLIPKART PAYMENTS,GURGAON                              MISC STORE                      300.00 Cr       15.00 Dr',
+    '        09/10/2026  CASHBACK CREDIT SEP26-MYNTRA:75                                                         75.00 Cr       0.00 Dr',
+    'Axis Bank Card No. 411111******1111',
+  ].join('\n');
+  const r = parseStatementText([page]);
+  assert.equal(sumOf(r, 'debit'), '1020.00');
+  assert.equal(sumOf(r, 'credit'), '5375.00');
+  assert.deepEqual(
+    r.transactions.map((t) => [t.description, t.direction, t.kind]),
+    [
+      ['Myntra', 'debit', 'spend'],
+      ['Flipkart', 'debit', 'spend'],
+      ['Card bill payment', 'credit', 'transfer'],
+      ['Flipkart', 'credit', 'spend'], // a refund, not a bill payment
+      ['Cashback', 'credit', 'spend'],
+    ],
+  );
+  assert.equal(r.account?.name, 'Axis Card ••1111');
+});
+
+test('statement parser: ICICI style — chart labels left of the date, serial numbers before the narration', () => {
+  const page = [
+    '                         ICICI Bank Credit Card',
+    '                                              Date        SerNo.    Transaction Details           Reward    Intl.  #  Amount (in  `  )',
+    '                                              4111XXXXXXXX2222',
+    '                                              27/10/2026  11111111111  BBPS Payment received        0               10,000.00 CR',
+    '            92%                               27/10/2026  22222222222  SWIGGY IN BANGALORE IN       5                   580.00',
+    '                                   8%         04/11/2026  33333333333  AMAZON PAY IN E COMMERC BANGALORE  -93       1,234.50 CR',
+    'ICICI Bank. Statement period : October 13, 2026 to November 12, 2026',
+  ].join('\n');
+  const r = parseStatementText([page]);
+  assert.deepEqual(
+    r.transactions.map((t) => [t.date, t.description, t.amount, t.direction, t.kind]),
+    [
+      ['2026-10-27', 'Card bill payment', 10000, 'credit', 'transfer'],
+      ['2026-10-27', 'Swiggy', 580, 'debit', 'spend'],
+      ['2026-11-04', 'Amazon', 1234.5, 'credit', 'spend'],
+    ],
+  );
+  assert.equal(r.account?.id, 'acct_icici_card_2222');
+});
+
+test('statement parser: SBI Card style — bare C / D marks, only 2 card digits shown', () => {
+  const page = [
+    '    GSTIN of SBI Card : 00AAAAA0000A0AA',
+    '          TEST USER                                                    Credit Card Number',
+    '                                                                      XXXX XXXX XXXX XX42',
+    '        Date                            Transaction Details                       Amount  ( ` )',
+    '                                   for Statement Period: 04 Oct 26 to 03 Nov 26',
+    '      05 Oct 26  AMAZON PAY INDIA PRIVA www.amazon.in IND (Pay in EMIs)            4,000.00  D',
+    '      24 Oct 26  REFUND AMAZON PAY INDIA PRIVA Bengaluru  IND                       112.00  C',
+    'SBI Card',
+  ].join('\n');
+  const r = parseStatementText([page]);
+  assert.deepEqual(
+    r.transactions.map((t) => [t.date, t.amount, t.direction]),
+    [
+      ['2026-10-05', 4000, 'debit'],
+      ['2026-10-24', 112, 'credit'],
+    ],
+  );
+  assert.equal(r.account?.name, 'SBI Card ••42');
+});
+
+test('detectAccount: bank and number that appear most often win', () => {
+  const text = 'IndusInd Bank Credit Card No. 4111XXXXXXXX3333\nIndusInd Bank\nPay via ICICI Bank\nCard 4111XXXXXXXX3333';
+  assert.deepEqual(detectAccount(text), {
+    id: 'acct_indusind_card_3333',
+    name: 'IndusInd Card ••3333',
+    bank: 'IndusInd',
+    kind: 'card',
+    last4: '3333',
+  });
+  assert.equal(detectAccount('HDFC BANK Statement of Account\nAccount No : XXXXXXXX5678\nHDFC Bank')?.name, 'HDFC A/c ••5678');
+  assert.equal(detectAccount('no bank here'), null);
 });

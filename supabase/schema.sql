@@ -76,11 +76,29 @@ create table if not exists public.settlements (
   primary key (user_id, id)
 );
 
+-- v2: credits and accounts (safe to run on an existing project; it only adds).
+alter table public.expenses add column if not exists type text not null default 'expense'
+  check (type in ('expense', 'credit'));
+alter table public.expenses add column if not exists account_id text;
+
+create table if not exists public.accounts (
+  user_id uuid not null default auth.uid() references auth.users on delete cascade,
+  id text not null,
+  name text not null,
+  bank text not null,
+  kind text not null check (kind in ('card', 'bank')),
+  last4 text not null,
+  updated_at bigint not null,
+  deleted boolean not null default false,
+  server_updated_at timestamptz not null default now(),
+  primary key (user_id, id)
+);
+
 do $$
 declare
   t text;
 begin
-  foreach t in array array['categories', 'expenses', 'people', 'budgets', 'settlements'] loop
+  foreach t in array array['categories', 'accounts', 'expenses', 'people', 'budgets', 'settlements'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "own rows" on public.%I', t);
     execute format(

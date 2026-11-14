@@ -3,8 +3,9 @@ import { ActivityIndicator, Alert, FlatList, Pressable, Text, View } from 'react
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useApp, useQuery } from '../lib/store';
-import { listCategories, listExpenses, saveExpense } from '../db/repo';
+import { ensureAccount, listCategories, listExpenses, saveExpense } from '../db/repo';
 import { ParseError, parseStatementPdf, pickStatementPdf, type PickedPdf } from '../lib/statement';
+import type { StatementAccount } from '../lib/statementParser';
 import { buildReview, type ReviewRow } from '../lib/statementReview';
 import { formatINR, round2 } from '../lib/money';
 import { dayLabel } from '../lib/dates';
@@ -22,13 +23,17 @@ export default function StatementImportScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<ReviewRow[]>([]);
-  const [summary, setSummary] = useState({ creditsSkipped: 0, pages: 0 });
+  const [summary, setSummary] = useState({ debits: 0, credits: 0, pages: 0 });
+  const [account, setAccount] = useState<StatementAccount | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const catById = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c])), [categories]);
   const selected = rows.filter((r) => r.selected);
-  const selectedTotal = round2(selected.reduce((a, r) => a + r.amount, 0));
+  const total = (type: 'expense' | 'credit') =>
+    round2(selected.filter((r) => r.type === type).reduce((a, r) => a + r.amount, 0));
+  const nExpenses = selected.filter((r) => r.type === 'expense').length;
+  const nCredits = selected.length - nExpenses;
 
   const read = async (file: PickedPdf, pw?: string) => {
     setError(null);
@@ -37,7 +42,12 @@ export default function StatementImportScreen() {
       const res = await parseStatementPdf(file.base64, pw);
       const review = buildReview(res.transactions, await listExpenses(db));
       setRows(review.rows);
-      setSummary({ creditsSkipped: review.creditsSkipped, pages: res.pages });
+      setSummary({
+        debits: review.debits,
+        credits: review.credits,
+        pages: res.pages,
+      });
+      setAccount(res.account);
       setStep('review');
     } catch (e) {
       if (e instanceof ParseError && (e.code === 'password_required' || e.code === 'wrong_password')) {
@@ -74,8 +84,11 @@ export default function StatementImportScreen() {
     try {
       const other = catById.cat_other?.id ?? null;
       await db.withTransactionAsync(async () => {
+        if (account) await ensureAccount(db, account);
         for (const r of selected) {
           await saveExpense(db, {
+            type: r.type,
+            accountId: account?.id ?? null,
             amount: r.amount,
             categoryId: catById[r.category]?.id ?? other,
             note: r.description,
@@ -86,7 +99,10 @@ export default function StatementImportScreen() {
         }
       });
       changed();
-      Alert.alert('Statement imported', `Added ${selected.length} expense${selected.length === 1 ? '' : 's'} (${formatINR(selectedTotal)}).`);
+      const parts = [];
+      if (nExpenses) parts.push(`${nExpenses} expense${nExpenses === 1 ? '' : 's'} (${formatINR(total('expense'))})`);
+      if (nCredits) parts.push(`${nCredits} credit${nCredits === 1 ? '' : 's'} (${formatINR(total('credit'))})`);
+      Alert.alert('Statement imported', `Added ${parts.join(' and ')}${account ? ` to ${account.name}` : ''}.`);
       router.back();
     } catch (e) {
       Alert.alert('Import failed', String(e));
@@ -109,7 +125,17 @@ export default function StatementImportScreen() {
 
   if (step === 'reading') {
     return (
-      <View style={[styles.screen, { alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }]}>
+      <View
+        style={[
+          styles.screen,
+          {
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            padding: 24,
+          },
+        ]}
+      >
         <ActivityIndicator size="large" color={colors.primary} />
         <Text style={{ fontSize: 16, fontWeight: '600' }}>Reading your statement…</Text>
         <Text style={[styles.muted, { textAlign: 'center' }]}>This takes a few seconds.</Text>
@@ -128,12 +154,14 @@ export default function StatementImportScreen() {
             <View style={{ gap: 12 }}>
               <Card>
                 <Text style={{ fontSize: 16, fontWeight: '600' }}>
-                  Found {rows.length} debit{rows.length === 1 ? '' : 's'} in {summary.pages} page{summary.pages === 1 ? '' : 's'}
+                  {account ? `💳 ${account.name}` : 'Account not recognised'}
                 </Text>
                 <Text style={styles.muted}>
-                  Credits (salary, refunds, payments received) are skipped
-                  {summary.creditsSkipped ? `: ${summary.creditsSkipped} skipped` : ''}. Transfers and possible duplicates
-                  start unticked. Tap a category to change it.
+                  Found {summary.debits} debit{summary.debits === 1 ? '' : 's'} and {summary.credits} credit
+                  {summary.credits === 1 ? '' : 's'} in {summary.pages} page
+                  {summary.pages === 1 ? '' : 's'}. Debits are added as expenses and credits (refunds, cashback, money
+                  received) as credit entries, which never count as spending. Bill payments, transfers and possible
+                  duplicates start unticked. Tap a category to change it.
                 </Text>
                 <View style={{ flexDirection: 'row', gap: 8 }}>
                   <Chip label="Select all" onPress={() => setAll(true)} />
@@ -146,7 +174,12 @@ export default function StatementImportScreen() {
             const cat = catById[r.category] ?? catById.cat_other;
             return (
               <Card style={{ paddingVertical: 12, opacity: r.selected ? 1 : 0.6 }}>
-                <Pressable onPress={() => toggle(r.key)} style={styles.row} accessibilityRole="checkbox" accessibilityState={{ checked: r.selected }}>
+                <Pressable
+                  onPress={() => toggle(r.key)}
+                  style={styles.row}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: r.selected }}
+                >
                   <View
                     style={{
                       width: 22,
@@ -159,21 +192,52 @@ export default function StatementImportScreen() {
                       justifyContent: 'center',
                     }}
                   >
-                    {r.selected ? <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>✓</Text> : null}
+                    {r.selected ? (
+                      <Text
+                        style={{
+                          color: '#fff',
+                          fontSize: 13,
+                          fontWeight: '700',
+                        }}
+                      >
+                        ✓
+                      </Text>
+                    ) : null}
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 15 }} numberOfLines={1}>{r.description}</Text>
+                    <Text style={{ fontSize: 15 }} numberOfLines={1}>
+                      {r.description}
+                    </Text>
                     <Text style={styles.muted}>{dayLabel(r.date)}</Text>
                   </View>
-                  <Text style={{ fontSize: 15, fontWeight: '600' }}>{formatINR(r.amount)}</Text>
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      fontWeight: '600',
+                      color: r.type === 'credit' ? colors.success : colors.text,
+                    }}
+                  >
+                    {r.type === 'credit' ? '+' : ''}
+                    {formatINR(r.amount)}
+                  </Text>
                 </Pressable>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    alignItems: 'center',
+                  }}
+                >
                   <Chip
                     label={`${cat?.icon ?? '📦'} ${cat?.name ?? 'Other'}`}
                     selected={editingKey === r.key}
                     onPress={() => setEditingKey(editingKey === r.key ? null : r.key)}
                   />
-                  {r.kind === 'transfer' ? <Badge text="Transfer / bill payment" color={colors.warning} bg={colors.warningSoft} /> : null}
+                  {r.type === 'credit' ? <Badge text="Credit" color={colors.success} bg={colors.successSoft} /> : null}
+                  {r.kind === 'transfer' ? (
+                    <Badge text="Transfer / bill payment" color={colors.warning} bg={colors.warningSoft} />
+                  ) : null}
                   {r.duplicate ? <Badge text="Already added?" color={colors.danger} bg={colors.dangerSoft} /> : null}
                 </View>
                 {editingKey === r.key ? (
@@ -193,9 +257,27 @@ export default function StatementImportScreen() {
             );
           }}
         />
-        <View style={{ position: 'absolute', left: 16, right: 16, bottom: 24, gap: 8 }}>
+        <View
+          style={{
+            position: 'absolute',
+            left: 16,
+            right: 16,
+            bottom: 24,
+            gap: 8,
+          }}
+        >
           <Button
-            title={selected.length ? `Add ${selected.length} expenses · ${formatINR(selectedTotal)}` : 'Select expenses to add'}
+            title={
+              selected.length
+                ? [
+                    nExpenses ? `${nExpenses} expense${nExpenses === 1 ? '' : 's'} ${formatINR(total('expense'))}` : '',
+                    nCredits ? `${nCredits} credit${nCredits === 1 ? '' : 's'} +${formatINR(total('credit'))}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                    .replace(/^/, 'Add ')
+                : 'Select entries to add'
+            }
             onPress={importSelected}
             disabled={!selected.length || saving}
           />
@@ -232,7 +314,8 @@ export default function StatementImportScreen() {
           <Text style={{ fontSize: 16, fontWeight: '600' }}>Import a bank or credit card statement</Text>
           <Text style={styles.muted}>
             Pick the PDF your bank emails you or that you download from net banking. The app reads every transaction and
-            you review them before anything is added. Only debits are imported. Free: no AI is used.
+            you review them before anything is added. Debits become expenses, credits become credit entries. Free: no AI
+            is used.
           </Text>
           {error ? <Text style={{ color: colors.danger }}>{error}</Text> : null}
           <Button title="Choose PDF" onPress={choose} />
@@ -248,7 +331,14 @@ export default function StatementImportScreen() {
 
 function Badge({ text, color, bg }: { text: string; color: string; bg: string }) {
   return (
-    <View style={{ backgroundColor: bg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+    <View
+      style={{
+        backgroundColor: bg,
+        borderRadius: 999,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+      }}
+    >
       <Text style={{ color, fontSize: 12, fontWeight: '600' }}>{text}</Text>
     </View>
   );

@@ -2,7 +2,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
-import { findOrCreateCategory, listCategories, listExpenses, listPeople, saveExpense } from '../db/repo';
+import { findOrCreateCategory, listAccounts, listCategories, listExpenses, listPeople, saveExpense } from '../db/repo';
 import { parseExpenseCSV, toCSV } from './csv';
 import { myShare } from './split';
 import { ME } from './types';
@@ -10,17 +10,25 @@ import { today } from './dates';
 
 /** Writes all expenses to a CSV file and opens the share sheet (Drive, WhatsApp, email…). */
 export async function exportCSV(db: SQLiteDatabase): Promise<number> {
-  const [expenses, categories, people] = await Promise.all([listExpenses(db), listCategories(db), listPeople(db)]);
+  const [expenses, categories, people, accounts] = await Promise.all([
+    listExpenses(db),
+    listCategories(db),
+    listPeople(db),
+    listAccounts(db),
+  ]);
+  const acct = Object.fromEntries(accounts.map((a) => [a.id, a.name]));
   const cat = Object.fromEntries(categories.map((c) => [c.id, c.name]));
   const name = (id: string) => (id === ME ? 'Me' : (people.find((p) => p.id === id)?.name ?? 'Unknown'));
   const csv = toCSV(
-    ['Date', 'Amount', 'My Share', 'Category', 'Note', 'Paid By', 'Split With'],
+    ['Date', 'Type', 'Amount', 'My Share', 'Category', 'Note', 'Account', 'Paid By', 'Split With'],
     expenses.map((e) => [
       e.date,
+      e.type === 'credit' ? 'Credit' : 'Expense',
       e.amount.toFixed(2),
       myShare(e).toFixed(2),
       e.categoryId ? (cat[e.categoryId] ?? '') : '',
       e.note,
+      e.accountId ? (acct[e.accountId] ?? '') : '',
       name(e.paidBy),
       e.shares.map((s) => `${name(s.personId)}: ${s.amount.toFixed(2)}`).join('; '),
     ]),
@@ -69,7 +77,16 @@ export async function importCSV(db: SQLiteDatabase): Promise<ImportSummary | nul
       }
       existing.add(key);
       const categoryId = r.category ? await findOrCreateCategory(db, r.category) : otherId;
-      await saveExpense(db, { amount: r.amount, categoryId, note: r.note, date: r.date, paidBy: ME, shares: [] });
+      await saveExpense(db, {
+        type: 'expense',
+        accountId: null,
+        amount: r.amount,
+        categoryId,
+        note: r.note,
+        date: r.date,
+        paidBy: ME,
+        shares: [],
+      });
       imported++;
     }
   });

@@ -14,7 +14,8 @@ import { getMeta, setMeta } from './repo';
 
 const COLUMNS: Record<SyncedTable, string[]> = {
   categories: ['name', 'icon', 'color', 'sort'],
-  expenses: ['amount', 'category_id', 'note', 'date', 'paid_by', 'shares'],
+  accounts: ['name', 'bank', 'kind', 'last4'],
+  expenses: ['amount', 'category_id', 'note', 'date', 'paid_by', 'shares', 'type', 'account_id'],
   people: ['name'],
   budgets: ['category_id', 'amount'],
   settlements: ['person_id', 'amount', 'direction', 'date', 'note'],

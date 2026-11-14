@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { randomUUID } from 'expo-crypto';
-import type { Budget, Category, Expense, Person, Settlement, Share } from '../lib/types';
+import { ME, type Account, type Budget, type Category, type EntryType, type Expense, type Person, type Settlement, type Share } from '../lib/types';
 import { myShare } from '../lib/split';
 import { round2 } from '../lib/money';
 
@@ -71,10 +71,14 @@ interface ExpenseRow {
   date: string;
   paid_by: string;
   shares: string;
+  type: EntryType;
+  account_id: string | null;
 }
 
 const toExpense = (r: ExpenseRow): Expense => ({
   id: r.id,
+  type: r.type,
+  accountId: r.account_id,
   amount: r.amount,
   categoryId: r.category_id,
   note: r.note,
@@ -83,7 +87,7 @@ const toExpense = (r: ExpenseRow): Expense => ({
   shares: JSON.parse(r.shares) as Share[],
 });
 
-const EXPENSE_COLS = 'id, amount, category_id, note, date, paid_by, shares';
+const EXPENSE_COLS = 'id, amount, category_id, note, date, paid_by, shares, type, account_id';
 
 /** month = 'YYYY-MM'; omit for all expenses. Newest first. */
 export async function listExpenses(db: SQLiteDatabase, month?: string): Promise<Expense[]> {
@@ -127,12 +131,16 @@ export async function listSplitExpenses(db: SQLiteDatabase): Promise<Expense[]> 
 export async function saveExpense(db: SQLiteDatabase, e: Omit<Expense, 'id'> & { id?: string }) {
   const id = e.id ?? newId();
   await db.runAsync(
-    `INSERT INTO expenses (id, amount, category_id, note, date, paid_by, shares, updated_at, deleted, dirty)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
+    `INSERT INTO expenses (id, amount, category_id, note, date, paid_by, shares, type, account_id, updated_at, deleted, dirty)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
      ON CONFLICT(id) DO UPDATE SET amount = excluded.amount, category_id = excluded.category_id,
        note = excluded.note, date = excluded.date, paid_by = excluded.paid_by, shares = excluded.shares,
+       type = excluded.type, account_id = excluded.account_id,
        updated_at = excluded.updated_at, deleted = 0, dirty = 1`,
-    id, round2(e.amount), e.categoryId, e.note.trim(), e.date, e.paidBy, JSON.stringify(e.shares), now(),
+    id, round2(e.amount), e.categoryId, e.note.trim(), e.date,
+    // Credits are never split.
+    e.type === 'credit' ? ME : e.paidBy, JSON.stringify(e.type === 'credit' ? [] : e.shares),
+    e.type, e.accountId, now(),
   );
   return id;
 }
@@ -145,6 +153,7 @@ export async function deleteExpense(db: SQLiteDatabase, id: string) {
 export async function spendByCategory(db: SQLiteDatabase, month: string): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   for (const e of await listExpenses(db, month)) {
+    if (e.type !== 'expense') continue;
     const k = e.categoryId ?? '';
     out[k] = round2((out[k] ?? 0) + myShare(e));
   }
@@ -155,7 +164,7 @@ export async function spendByCategory(db: SQLiteDatabase, month: string): Promis
 export async function spendByMonth(db: SQLiteDatabase, months: string[]): Promise<Record<string, number>> {
   if (months.length === 0) return {};
   const rows = await db.getAllAsync<ExpenseRow>(
-    `SELECT ${EXPENSE_COLS} FROM expenses WHERE deleted = 0 AND substr(date, 1, 7) IN (${months.map(() => '?').join(',')})`,
+    `SELECT ${EXPENSE_COLS} FROM expenses WHERE deleted = 0 AND type = 'expense' AND substr(date, 1, 7) IN (${months.map(() => '?').join(',')})`,
     months,
   );
   const out: Record<string, number> = Object.fromEntries(months.map((m) => [m, 0]));
@@ -165,6 +174,22 @@ export async function spendByMonth(db: SQLiteDatabase, months: string[]): Promis
     out[m] = round2(out[m] + myShare(e));
   }
   return out;
+}
+
+// ---------- Accounts ----------
+
+export async function listAccounts(db: SQLiteDatabase): Promise<Account[]> {
+  return db.getAllAsync<Account>('SELECT id, name, bank, kind, last4 FROM accounts WHERE deleted = 0 ORDER BY name');
+}
+
+/** Adds a card / account seen on a statement. Its id is derived from bank + last 4 digits, so re-importing finds the same one. */
+export async function ensureAccount(db: SQLiteDatabase, a: Account) {
+  await db.runAsync(
+    `INSERT INTO accounts (id, name, bank, kind, last4, updated_at, deleted, dirty) VALUES (?, ?, ?, ?, ?, ?, 0, 1)
+     ON CONFLICT(id) DO UPDATE SET deleted = 0, dirty = CASE WHEN accounts.deleted = 1 THEN 1 ELSE accounts.dirty END,
+       updated_at = CASE WHEN accounts.deleted = 1 THEN excluded.updated_at ELSE accounts.updated_at END`,
+    a.id, a.name, a.bank, a.kind, a.last4, now(),
+  );
 }
 
 // ---------- People ----------

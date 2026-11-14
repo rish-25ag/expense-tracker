@@ -13,8 +13,14 @@ export interface Share {
   amount: number; // in rupees, 2 decimals
 }
 
+/** expense = money spent; credit = money in (refund, cashback, salary...). Credits never count as spending. */
+export type EntryType = 'expense' | 'credit';
+
 export interface Expense {
   id: string;
+  type: EntryType;
+  /** Card or bank account it was paid from / credited to, if known. */
+  accountId: string | null;
   amount: number; // total bill amount
   categoryId: string | null;
   note: string;
@@ -27,6 +33,15 @@ export interface Expense {
 export interface Person {
   id: string;
   name: string;
+}
+
+/** A bank account or credit card, detected from imported statements. */
+export interface Account {
+  id: string;
+  name: string; // e.g. "Axis Card ••1234"
+  bank: string;
+  kind: 'card' | 'bank';
+  last4: string;
 }
 
 export interface Budget {

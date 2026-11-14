@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
-import { Pressable, SectionList, Text, View } from 'react-native';
+import { Pressable, ScrollView, SectionList, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery } from '../../lib/store';
-import { listBudgets, listCategories, listExpenses, listPeople } from '../../db/repo';
+import { listAccounts, listBudgets, listCategories, listExpenses, listPeople } from '../../db/repo';
 import { myShare } from '../../lib/split';
 import { formatINR, round2 } from '../../lib/money';
 import { currentMonth, dayLabel } from '../../lib/dates';
 import { ME, type Expense } from '../../lib/types';
-import { Card, Empty, MonthSwitcher, ProgressBar, colors, styles } from '../../components/ui';
+import { Card, Chip, Empty, MonthSwitcher, ProgressBar, colors, styles } from '../../components/ui';
 
 export default function ExpensesScreen() {
   const [month, setMonth] = useState(currentMonth());
@@ -15,22 +15,34 @@ export default function ExpensesScreen() {
   const categories = useQuery(listCategories, [], []);
   const people = useQuery(listPeople, [], []);
   const budgets = useQuery(listBudgets, [], []);
+  const accounts = useQuery(listAccounts, [], []);
+  /** null = all accounts. */
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const acctById = useMemo(() => Object.fromEntries(accounts.map((a) => [a.id, a])), [accounts]);
 
   const catById = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c])), [categories]);
   const nameById = useMemo(() => Object.fromEntries(people.map((p) => [p.id, p.name])), [people]);
 
-  const { total, sections, over, budgetedSpent } = useMemo(() => {
+  const { total, credited, sections, over, budgetedSpent } = useMemo(() => {
     const byDay = new Map<string, Expense[]>();
     const byCat: Record<string, number> = {};
     let t = 0;
+    let c = 0;
     for (const e of expenses) {
+      if (accountId && e.accountId !== accountId) continue;
+      byDay.set(e.date, [...(byDay.get(e.date) ?? []), e]);
+      // Credits are shown, but never count as spending.
+      if (e.type === 'credit') {
+        c += e.amount;
+        continue;
+      }
       const s = myShare(e);
       t += s;
       if (e.categoryId) byCat[e.categoryId] = (byCat[e.categoryId] ?? 0) + s;
-      byDay.set(e.date, [...(byDay.get(e.date) ?? []), e]);
     }
     return {
       total: round2(t),
+      credited: round2(c),
       sections: [...byDay.entries()].map(([date, data]) => ({ date, data })),
       over: budgets.filter((b) => (byCat[b.categoryId] ?? 0) > b.amount && catById[b.categoryId]),
       // Compare budgets only against spending in the categories that have one.
@@ -38,7 +50,7 @@ export default function ExpensesScreen() {
         budgets.filter((b) => catById[b.categoryId]).reduce((a, b) => a + (byCat[b.categoryId] ?? 0), 0),
       ),
     };
-  }, [expenses, budgets, catById]);
+  }, [expenses, budgets, catById, accountId]);
 
   const budgetTotal = budgets.filter((b) => catById[b.categoryId]).reduce((a, b) => a + b.amount, 0);
 
@@ -52,10 +64,28 @@ export default function ExpensesScreen() {
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
             <MonthSwitcher month={month} onChange={setMonth} />
+            {accounts.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                <Chip label="All accounts" selected={accountId === null} onPress={() => setAccountId(null)} />
+                {accounts.map((a) => (
+                  <Chip
+                    key={a.id}
+                    label={`💳 ${a.name}`}
+                    selected={accountId === a.id}
+                    onPress={() => setAccountId(a.id)}
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
             <Card>
-              <Text style={styles.muted}>You spent</Text>
+              <Text style={styles.muted}>
+                {accountId ? `Spent on ${acctById[accountId]?.name ?? 'this account'}` : 'You spent'}
+              </Text>
               <Text style={styles.big}>{formatINR(total)}</Text>
-              {budgetTotal > 0 ? (
+              {credited > 0 ? (
+                <Text style={{ color: colors.success, fontWeight: '600' }}>Credited +{formatINR(credited)}</Text>
+              ) : null}
+              {budgetTotal > 0 && !accountId ? (
                 <>
                   <ProgressBar value={budgetedSpent} max={budgetTotal} />
                   <Text style={styles.muted}>
@@ -66,9 +96,15 @@ export default function ExpensesScreen() {
                 </>
               ) : null}
             </Card>
-            {over.map((b) => (
+            {(accountId ? [] : over).map((b) => (
               <Pressable key={b.id} onPress={() => router.navigate('/budgets')}>
-                <View style={{ backgroundColor: colors.dangerSoft, borderRadius: 10, padding: 12 }}>
+                <View
+                  style={{
+                    backgroundColor: colors.dangerSoft,
+                    borderRadius: 10,
+                    padding: 12,
+                  }}
+                >
                   <Text style={{ color: colors.danger, fontWeight: '600' }}>
                     ⚠️ Over budget: {catById[b.categoryId].icon} {catById[b.categoryId].name}
                   </Text>
@@ -85,6 +121,7 @@ export default function ExpensesScreen() {
           const split = e.shares.length > 0;
           const mine = myShare(e);
           const payer = e.paidBy === ME ? 'You' : (nameById[e.paidBy] ?? 'Someone');
+          const isCredit = e.type === 'credit';
           return (
             <Pressable onPress={() => router.push(`/expense/${e.id}`)}>
               <Card style={{ paddingVertical: 12 }}>
@@ -106,12 +143,21 @@ export default function ExpensesScreen() {
                       {e.note || cat?.name || 'Expense'}
                     </Text>
                     <Text style={styles.muted} numberOfLines={1}>
-                      {cat?.name ?? 'Uncategorised'}
+                      {isCredit ? 'Credit' : (cat?.name ?? 'Uncategorised')}
                       {split ? ` · split ${e.shares.length} ways · ${payer} paid` : ''}
+                      {e.accountId && !accountId ? ` · ${acctById[e.accountId]?.name ?? ''}` : ''}
                     </Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>{formatINR(mine)}</Text>
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        fontWeight: '600',
+                        color: isCredit ? colors.success : colors.text,
+                      }}
+                    >
+                      {isCredit ? `+${formatINR(e.amount)}` : formatINR(mine)}
+                    </Text>
                     {split ? <Text style={styles.muted}>of {formatINR(e.amount)}</Text> : null}
                   </View>
                 </View>
@@ -119,7 +165,12 @@ export default function ExpensesScreen() {
             </Pressable>
           );
         }}
-        ListEmptyComponent={<Empty title="No expenses this month" hint="Tap + to add your first one." />}
+        ListEmptyComponent={
+          <Empty
+            title={accountId ? 'Nothing on this account this month' : 'No expenses this month'}
+            hint="Tap + to add one, or import a statement from Settings."
+          />
+        }
       />
       <Pressable
         style={styles.fab}

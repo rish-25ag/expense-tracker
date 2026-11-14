@@ -7,7 +7,8 @@ Amounts are in Indian Rupees (₹) with Indian digit grouping (₹1,23,456).
 - **Insights**: spending by category and a 6-month trend, plus a comparison with last month and your monthly average.
 - **Budgets**: a monthly limit per category, with a progress bar and a warning when an expense takes you past 80% or over the limit.
 - **Split**: split a bill with friends added by name (equally or by custom amounts), track who owes whom, settle up fully or partly, and share a reminder on WhatsApp or anywhere else. Your friends don't need the app.
-- **Statement PDF import**: pick a bank or credit card statement PDF (password-protected ones too). The app reads the transactions, and you review the debits (category, untick transfers or duplicates) before adding them. Free: no AI or paid service is used.
+- **Statement PDF import**: pick a bank or credit card statement PDF (password-protected ones too). The app reads the transactions and the card / account they belong to, and you review them before adding. Free: no AI or paid service is used.
+- **Credits & accounts**: refunds, cashback and money received are saved as credit entries, shown separately and never counted as spending. Each imported entry is tagged with its card or account (e.g. "Axis Card ••1234"), and the Expenses screen can be filtered by account.
 - **CSV**: export everything to CSV, or import from this app's CSV or a bank statement.
 - **Offline-first + cloud backup**: data lives in SQLite on the phone, so the app works without internet. Sign in and it syncs with your own Supabase project, so nothing is lost if you change phones.
 
@@ -61,11 +62,12 @@ The anon key is designed to be used in apps. Your data is protected by the row-l
    - **Credit card statements** (for example HSBC): rows like `26SEP  MERCHANT  CITY  1,234.00`, with `CR` after credits. Rows without a year take it from the statement period.
    - **Bank account statements:** a header row with Date and Withdrawal/Debit and Deposit/Credit columns. Which column an amount sits under decides whether it's money out or in.
    - Merchant names are tidied up and given a category (`RSP*BLINK COMMERCE PV BANGALORE` becomes **Blinkit → Groceries**). Unknown merchants go to **Other**.
-3. You review the debits. Credits (payments, refunds, salary) are skipped. Card bill payments, own-account transfers, SIPs and EMIs start unticked, as do rows that match an expense you already have (same date and amount). Nothing is added until you tap **Add**.
+3. The card or account is identified from the statement (bank name plus the visible last digits of the number, e.g. **Axis Card ••1234**), and every imported entry is tagged with it.
+4. You review the rows. Debits become **expenses**. Credits (refunds, cashback, money received) become **credit entries**, which are shown in green and never count as spending, budgets or Insights. Card bill payments (and "payment received" on card statements), own-account transfers, SIPs and EMIs start unticked, as do rows that match an entry you already have (same type, date and amount). Nothing is added until you tap **Add**.
 
 ### Set it up (once)
 
-You need the Supabase project from "Set up Supabase" above. Then, from this folder:
+You need the Supabase project from "Set up Supabase" above. If you set Supabase up before credits and accounts were added, run `supabase/schema.sql` in the SQL Editor once more: it only adds the new `accounts` table and two columns, and keeps your data. Then, from this folder:
 
 1. Log in to Supabase. This opens your browser:
 
@@ -91,7 +93,7 @@ To update the function later, run step 3 again. Changes to how transactions are 
 
 ### Supported layouts and limits
 
-- Tested on HSBC credit card statements and on bank statements with Date / Withdrawal / Deposit columns (HDFC style). Other banks using either layout should work. If a statement shows "No transactions were recognised", its layout needs a new rule.
+- Tested on real credit card statements from **HSBC, Axis, ICICI, SBI Card and IndusInd**, with totals matching each statement's own summary, and on bank statements with Date / Withdrawal / Deposit columns (HDFC style). Other banks using similar layouts should work. If a statement shows "No transactions were recognised", its layout needs a new rule.
 - To add or fix a merchant name or category, edit the `MERCHANTS` list in `src/lib/statementParser.ts`.
 - PDFs up to 10 MB. The PDF must contain text, as statements from net banking or bank emails do. Scanned or photographed statements are rejected with a message.
 

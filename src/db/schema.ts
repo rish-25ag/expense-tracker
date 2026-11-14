@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  *   deleted     1 = soft-deleted (tombstone, so deletes sync too)
  *   dirty       1 = changed locally and not yet pushed to Supabase (local only)
  */
-export const SYNCED_TABLES = ['categories', 'expenses', 'people', 'budgets', 'settlements'] as const;
+export const SYNCED_TABLES = ['categories', 'accounts', 'expenses', 'people', 'budgets', 'settlements'] as const;
 export type SyncedTable = (typeof SYNCED_TABLES)[number];
 
 const SYNC_COLS = `
@@ -53,6 +53,18 @@ const MIGRATIONS: string[] = [
     note TEXT NOT NULL DEFAULT '',${SYNC_COLS}
   );
   CREATE TABLE meta (key TEXT PRIMARY KEY NOT NULL, value TEXT);
+  `,
+  // v2: credits and accounts (cards / bank accounts from imported statements)
+  `
+  ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense';
+  ALTER TABLE expenses ADD COLUMN account_id TEXT;
+  CREATE TABLE accounts (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    bank TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    last4 TEXT NOT NULL,${SYNC_COLS}
+  );
   `,
 ];
 

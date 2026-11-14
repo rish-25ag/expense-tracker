@@ -5,6 +5,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { useApp, useQuery } from '../../lib/store';
 import {
   deleteExpense,
+  listAccounts,
   getExpense,
   listBudgets,
   listCategories,
@@ -16,7 +17,7 @@ import {
 import { formatINR, parseAmount, round2, splitEqually } from '../../lib/money';
 import { monthOf, today } from '../../lib/dates';
 import { validateShares } from '../../lib/split';
-import { ME, type Share } from '../../lib/types';
+import { ME, type EntryType, type Share } from '../../lib/types';
 import { Button, Card, Chip, DateField, Field, colors, styles } from '../../components/ui';
 
 type SplitMode = 'equal' | 'custom';
@@ -31,6 +32,9 @@ export default function ExpenseEditor() {
   const people = useQuery(listPeople, [], []);
 
   const [loaded, setLoaded] = useState(isNew);
+  const [type, setType] = useState<EntryType>('expense');
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const accounts = useQuery(listAccounts, [], []);
   const [amountText, setAmountText] = useState('');
   const [pickedCategoryId, setCategoryId] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -43,10 +47,11 @@ export default function ExpenseEditor() {
   const [newPerson, setNewPerson] = useState('');
 
   useEffect(() => {
-    navigation.setOptions({ title: isNew ? 'Add expense' : 'Edit expense' });
     if (isNew) return;
     getExpense(db, id).then((e) => {
       if (!e) return router.back();
+      setType(e.type);
+      setAccountId(e.accountId);
       setAmountText(String(e.amount));
       setCategoryId(e.categoryId);
       setNote(e.note);
@@ -66,6 +71,11 @@ export default function ExpenseEditor() {
 
   // New expenses default to the first category until the user picks one.
   const categoryId = pickedCategoryId ?? (isNew ? (categories[0]?.id ?? null) : null);
+  useEffect(() => {
+    const noun = type === 'credit' ? 'credit' : 'expense';
+    navigation.setOptions({ title: isNew ? `Add ${noun}` : `Edit ${noun}` });
+  }, [type, isNew, navigation]);
+
   const amount = parseAmount(amountText);
   const participants = [ME, ...withIds];
   const nameOf = (pid: string) => (pid === ME ? 'You' : (people.find((p) => p.id === pid)?.name ?? '?'));
@@ -74,9 +84,15 @@ export default function ExpenseEditor() {
     if (!isSplit || withIds.length === 0) return [];
     if (mode === 'equal') {
       const parts = splitEqually(amount > 0 ? amount : 0, participants.length);
-      return participants.map((pid, i) => ({ personId: pid, amount: parts[i] }));
+      return participants.map((pid, i) => ({
+        personId: pid,
+        amount: parts[i],
+      }));
     }
-    return participants.map((pid) => ({ personId: pid, amount: parseAmount(custom[pid] ?? '') || 0 }));
+    return participants.map((pid) => ({
+      personId: pid,
+      amount: parseAmount(custom[pid] ?? '') || 0,
+    }));
   }, [isSplit, withIds, mode, amount, custom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleWith = (pid: string) => {
@@ -100,20 +116,23 @@ export default function ExpenseEditor() {
       const err = validateShares(amount, shares);
       if (err) return Alert.alert('Shares don’t add up', err);
     }
-    const finalPaidBy = shares.length ? paidBy : ME;
+    const isCredit = type === 'credit';
+    const finalPaidBy = shares.length && !isCredit ? paidBy : ME;
     await saveExpense(db, {
       id: isNew ? undefined : id,
+      type,
+      accountId,
       amount,
       categoryId,
       note,
       date,
       paidBy: finalPaidBy,
-      shares,
+      shares: isCredit ? [] : shares,
     });
     changed();
 
-    // Budget warning for this category's month.
-    if (categoryId) {
+    // Budget warning for this category's month (credits never count as spending).
+    if (categoryId && !isCredit) {
       const budget = (await listBudgets(db)).find((b) => b.categoryId === categoryId);
       if (budget) {
         const spent = (await spendByCategory(db, monthOf(date)))[categoryId] ?? 0;
@@ -124,7 +143,10 @@ export default function ExpenseEditor() {
             `${cat?.name}: ${formatINR(spent)} spent of ${formatINR(budget.amount)} this month (${formatINR(round2(spent - budget.amount))} over).`,
           );
         } else if (spent >= budget.amount * 0.8) {
-          Alert.alert('Heads up', `${cat?.name}: ${Math.round((spent / budget.amount) * 100)}% of this month’s budget used.`);
+          Alert.alert(
+            'Heads up',
+            `${cat?.name}: ${Math.round((spent / budget.amount) * 100)}% of this month’s budget used.`,
+          );
         }
       }
     }
@@ -132,7 +154,7 @@ export default function ExpenseEditor() {
   };
 
   const remove = () =>
-    Alert.alert('Delete expense?', 'This can’t be undone.', [
+    Alert.alert(type === 'credit' ? 'Delete credit?' : 'Delete expense?', 'This can’t be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -152,8 +174,12 @@ export default function ExpenseEditor() {
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Chip label="Expense" selected={type === 'expense'} onPress={() => setType('expense')} />
+          <Chip label="Credit" color={colors.success} selected={type === 'credit'} onPress={() => setType('credit')} />
+        </View>
         <Card>
-          <Text style={styles.label}>Amount</Text>
+          <Text style={styles.label}>{type === 'credit' ? 'Amount received' : 'Amount'}</Text>
           <View style={[styles.row, { gap: 4 }]}>
             <Text style={[styles.big, { color: colors.muted }]}>₹</Text>
             <TextInput
@@ -187,88 +213,107 @@ export default function ExpenseEditor() {
         <Card>
           <Field label="Note" value={note} onChangeText={setNote} placeholder="e.g. Dinner at Toit" />
           <DateField value={date} onChange={setDate} />
-        </Card>
-
-        <Card>
-          <View style={styles.row}>
-            <Text style={styles.rowText}>Split this expense</Text>
-            <Switch value={isSplit} onValueChange={setIsSplit} trackColor={{ true: colors.primary }} />
-          </View>
-          {isSplit ? (
-            <View style={{ gap: 12 }}>
-              <Text style={styles.label}>With</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {people.map((p) => (
-                  <Chip key={p.id} label={p.name} selected={withIds.includes(p.id)} onPress={() => toggleWith(p.id)} />
-                ))}
-              </View>
-              <View style={styles.row}>
-                <TextInput
-                  value={newPerson}
-                  onChangeText={setNewPerson}
-                  placeholder="Add a friend by name"
-                  placeholderTextColor={colors.muted}
-                  onSubmitEditing={addPerson}
-                  returnKeyType="done"
-                  style={[styles.input, { flex: 1 }]}
-                />
-                <Button title="Add" variant="secondary" onPress={addPerson} />
-              </View>
-
-              {withIds.length ? (
-                <>
-                  <Text style={styles.label}>Paid by</Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                    {participants.map((pid) => (
-                      <Chip key={pid} label={nameOf(pid)} selected={paidBy === pid} onPress={() => setPaidBy(pid)} />
-                    ))}
-                  </View>
-
-                  <Text style={styles.label}>Split</Text>
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    <Chip label="Equally" selected={mode === 'equal'} onPress={() => setMode('equal')} />
-                    <Chip
-                      label="Custom amounts"
-                      selected={mode === 'custom'}
-                      onPress={() => {
-                        setCustom(Object.fromEntries(shares.map((s) => [s.personId, String(s.amount)])));
-                        setMode('custom');
-                      }}
-                    />
-                  </View>
-
-                  {participants.map((pid, i) => (
-                    <View key={pid} style={styles.row}>
-                      <Text style={styles.rowText}>{nameOf(pid)}</Text>
-                      {mode === 'equal' ? (
-                        <Text style={{ fontSize: 16, color: colors.text }}>{formatINR(shares[i]?.amount ?? 0)}</Text>
-                      ) : (
-                        <TextInput
-                          value={custom[pid] ?? ''}
-                          onChangeText={(t) => setCustom((c) => ({ ...c, [pid]: t }))}
-                          keyboardType="decimal-pad"
-                          placeholder="0"
-                          placeholderTextColor={colors.muted}
-                          style={[styles.input, { width: 120, textAlign: 'right', paddingVertical: 8 }]}
-                        />
-                      )}
-                    </View>
-                  ))}
-                  {mode === 'custom' && amount > 0 && customSum !== round2(amount) ? (
-                    <Text style={{ color: colors.warning }}>
-                      {customSum < amount
-                        ? `${formatINR(round2(amount - customSum))} left to assign`
-                        : `${formatINR(round2(customSum - amount))} more than the total`}
-                    </Text>
-                  ) : null}
-                </>
-              ) : null}
-            </View>
+          {accountId ? (
+            <Text style={styles.muted}>💳 {accounts.find((a) => a.id === accountId)?.name ?? 'Imported account'}</Text>
           ) : null}
         </Card>
 
-        <Button title={isNew ? 'Add expense' : 'Save changes'} onPress={save} />
-        {!isNew ? <Button title="Delete expense" variant="danger" onPress={remove} /> : null}
+        {type === 'expense' ? (
+          <Card>
+            <View style={styles.row}>
+              <Text style={styles.rowText}>Split this expense</Text>
+              <Switch value={isSplit} onValueChange={setIsSplit} trackColor={{ true: colors.primary }} />
+            </View>
+            {isSplit ? (
+              <View style={{ gap: 12 }}>
+                <Text style={styles.label}>With</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {people.map((p) => (
+                    <Chip
+                      key={p.id}
+                      label={p.name}
+                      selected={withIds.includes(p.id)}
+                      onPress={() => toggleWith(p.id)}
+                    />
+                  ))}
+                </View>
+                <View style={styles.row}>
+                  <TextInput
+                    value={newPerson}
+                    onChangeText={setNewPerson}
+                    placeholder="Add a friend by name"
+                    placeholderTextColor={colors.muted}
+                    onSubmitEditing={addPerson}
+                    returnKeyType="done"
+                    style={[styles.input, { flex: 1 }]}
+                  />
+                  <Button title="Add" variant="secondary" onPress={addPerson} />
+                </View>
+
+                {withIds.length ? (
+                  <>
+                    <Text style={styles.label}>Paid by</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {participants.map((pid) => (
+                        <Chip key={pid} label={nameOf(pid)} selected={paidBy === pid} onPress={() => setPaidBy(pid)} />
+                      ))}
+                    </View>
+
+                    <Text style={styles.label}>Split</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Chip label="Equally" selected={mode === 'equal'} onPress={() => setMode('equal')} />
+                      <Chip
+                        label="Custom amounts"
+                        selected={mode === 'custom'}
+                        onPress={() => {
+                          setCustom(Object.fromEntries(shares.map((s) => [s.personId, String(s.amount)])));
+                          setMode('custom');
+                        }}
+                      />
+                    </View>
+
+                    {participants.map((pid, i) => (
+                      <View key={pid} style={styles.row}>
+                        <Text style={styles.rowText}>{nameOf(pid)}</Text>
+                        {mode === 'equal' ? (
+                          <Text style={{ fontSize: 16, color: colors.text }}>{formatINR(shares[i]?.amount ?? 0)}</Text>
+                        ) : (
+                          <TextInput
+                            value={custom[pid] ?? ''}
+                            onChangeText={(t) => setCustom((c) => ({ ...c, [pid]: t }))}
+                            keyboardType="decimal-pad"
+                            placeholder="0"
+                            placeholderTextColor={colors.muted}
+                            style={[
+                              styles.input,
+                              {
+                                width: 120,
+                                textAlign: 'right',
+                                paddingVertical: 8,
+                              },
+                            ]}
+                          />
+                        )}
+                      </View>
+                    ))}
+                    {mode === 'custom' && amount > 0 && customSum !== round2(amount) ? (
+                      <Text style={{ color: colors.warning }}>
+                        {customSum < amount
+                          ? `${formatINR(round2(amount - customSum))} left to assign`
+                          : `${formatINR(round2(customSum - amount))} more than the total`}
+                      </Text>
+                    ) : null}
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+          </Card>
+        ) : null}
+
+        <Button title={isNew ? (type === 'credit' ? 'Add credit' : 'Add expense') : 'Save changes'} onPress={save} />
+        {!isNew ? (
+          <Button title={type === 'credit' ? 'Delete credit' : 'Delete expense'} variant="danger" onPress={remove} />
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );

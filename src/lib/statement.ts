@@ -3,7 +3,7 @@ import { File } from 'expo-file-system';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import type { StatementTxn } from './statementReview';
-import { parseStatementText } from './statementParser';
+import { parseStatementText, type StatementAccount } from './statementParser';
 
 export const MAX_PDF_MB = 10;
 
@@ -52,6 +52,8 @@ export class ParseError extends Error {
 export interface ParsedStatement {
   transactions: StatementTxn[];
   pages: number;
+  /** The card / bank account the statement is for, when it could be identified. */
+  account: StatementAccount | null;
 }
 
 /**
@@ -77,12 +79,12 @@ export async function parseStatementPdf(pdfBase64: string, password: string | un
     throw new ParseError('network', 'Could not reach the server. Check your internet connection.');
   }
   const pages = data?.pages ?? [];
-  const { transactions } = parseStatementText(pages);
+  const { transactions, account } = parseStatementText(pages);
   if (!transactions.length) {
     throw new ParseError(
       'no_transactions',
       'No transactions were recognised in this statement. Its layout may not be supported yet — tell the developer which bank it is from.',
     );
   }
-  return { transactions, pages: pages.length };
+  return { transactions, pages: pages.length, account };
 }
