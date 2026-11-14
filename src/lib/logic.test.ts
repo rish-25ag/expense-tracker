@@ -163,7 +163,7 @@ test('statement parser: credit card layout (HSBC style)', () => {
   assert.deepEqual(
     r.transactions.map((t) => [t.date, t.amount, t.direction, t.description, t.category, t.kind]),
     [
-      ['2026-12-26', 20000, 'credit', 'Card bill payment', 'cat_other', 'transfer'],
+      ['2026-12-26', 20000, 'credit', 'Card bill payment (card ••1234)', 'cat_other', 'transfer'],
       ['2026-12-23', 168, 'debit', 'Blinkit', 'cat_groceries', 'spend'],
       ['2026-12-24', 95, 'credit', 'Swiggy Instamart', 'cat_groceries', 'spend'],
       ['2026-12-28', 1500.5, 'debit', 'Zomato', 'cat_food', 'spend'],
@@ -172,7 +172,7 @@ test('statement parser: credit card layout (HSBC style)', () => {
     ],
   );
   // Card numbers never end up in a description.
-  assert.ok(r.transactions.every((t) => !/\d{4}/.test(t.description)));
+  assert.ok(r.transactions.every((t) => !/\d{5,}|\d{4}[ -]\d{4}/.test(t.description))); // at most the last 4 digits
 });
 
 test('statement parser: bank layout with Withdrawal / Deposit columns', () => {
@@ -191,7 +191,7 @@ test('statement parser: bank layout with Withdrawal / Deposit columns', () => {
     [
       ['2026-11-01', 485, 'debit', 'Swiggy', 'spend'],
       ['2026-11-02', 85000, 'credit', 'Salary Nov 2026 Acme Tech', 'spend'],
-      ['2026-11-04', 18200, 'debit', 'Hdfc Credit Card Bill Payment', 'transfer'],
+      ['2026-11-04', 18200, 'debit', 'Card bill payment', 'transfer'],
       ['2026-11-06', 1845, 'debit', 'Electricity bill', 'spend'],
     ],
   );
@@ -219,7 +219,7 @@ const sumOf = (r: ReturnType<typeof parseStatementText>, dir: 'debit' | 'credit'
 test('statement parser: Axis style — amount column chosen over the cashback column, Dr/Cr marks', () => {
   const page = [
     '                                                               Flipkart Axis Bank Credit Card Statement',
-    '          15/09/2026 - 13/10/2026',
+    '          15/09/2026 - 13/10/2026      Credit Limit   2,00,000.00',
     '           DATE                       TRANSACTION DETAILS                    MERCHANT CATEGORY      AMOUNT (Rs.)    CASHBACK EARNED',
     '        Card No:          411111******1111                                 Name    Test User',
     '        18/09/2026  PPSL*MYNTRA DESIGNS PR,KARNATAKA                       CLOTH STORES                   1,000.00 Dr       75.00 Cr',
@@ -247,7 +247,7 @@ test('statement parser: Axis style — amount column chosen over the cashback co
 
 test('statement parser: ICICI style — chart labels left of the date, serial numbers before the narration', () => {
   const page = [
-    '                         ICICI Bank Credit Card',
+    '                         ICICI Bank CREDIT CARD STATEMENT',
     '                                              Date        SerNo.    Transaction Details           Reward    Intl.  #  Amount (in  `  )',
     '                                              4111XXXXXXXX2222',
     '                                              27/10/2026  11111111111  BBPS Payment received        0               10,000.00 CR',
@@ -269,7 +269,7 @@ test('statement parser: ICICI style — chart labels left of the date, serial nu
 
 test('statement parser: SBI Card style — bare C / D marks, only 2 card digits shown', () => {
   const page = [
-    '    GSTIN of SBI Card : 00AAAAA0000A0AA',
+    '    GSTIN of SBI Card : 00AAAAA0000A0AA          Credit Limit ( ` )',
     '          TEST USER                                                    Credit Card Number',
     '                                                                      XXXX XXXX XXXX XX42',
     '        Date                            Transaction Details                       Amount  ( ` )',
@@ -290,7 +290,7 @@ test('statement parser: SBI Card style — bare C / D marks, only 2 card digits 
 });
 
 test('detectAccount: bank and number that appear most often win', () => {
-  const text = 'IndusInd Bank Credit Card No. 4111XXXXXXXX3333\nIndusInd Bank\nPay via ICICI Bank\nCard 4111XXXXXXXX3333';
+  const text = 'IndusInd Bank Credit Card No. 4111XXXXXXXX3333\nCredit Limit\nIndusInd Bank\nPay via ICICI Bank\nCard 4111XXXXXXXX3333';
   assert.deepEqual(detectAccount(text), {
     id: 'acct_indusind_card_3333',
     name: 'IndusInd Card ••3333',
@@ -352,4 +352,76 @@ test('account holder detection and name variants', () => {
   assert.deepEqual(holderVariants('TEST KUMAR'), ['TEST KUMAR', 'KUMAR TEST', 'KUMAR T', 'T KUMAR']);
   assert.equal(classify('UPI-KUMAR T-TK@OKAXIS-UTIB0000001-123456789012-UPI', 'TEST KUMAR').description, 'Own account transfer');
   assert.equal(classify('UPI-KUMAR TRADERS-KT@OKAXIS-UTIB0000001-123456789012-UPI', 'TEST KUMAR').transfer, false);
+});
+
+// Synthetic HSBC savings account (net banking download) — invented data.
+const hsbcPage = (n: number, body: string[]) =>
+  [
+    '     11/14/26, 10:22 AM                                        Account summary and transactions',
+    '                                                                                                                 Balance',
+    ...body,
+    `     about:blank                                                                                                           ${n}/3`,
+  ].join('\n');
+const HSBC_BANK = [
+  hsbcPage(1, [
+    '         HSBC Account Statement',
+    '         SAVINGS ACCOUNT - RES                                                                             10,000.00   INR',
+    '         MR TEST KUMAR                                                                           Available balance:  10,000.00  INR',
+    '         Account number:  011-222333-444',
+    '            Date               Description                            Credit                 Debit               Balance',
+    '            11/11/2026         TRANSFER                             1,616.00                                   10,000.00',
+    '                               TRANSFER',
+    '                               UPI20261111000000001',
+    '                               631500000001',
+    '                               ASHA SHARMA',
+    '                               U@0000001',
+    '            10/11/2026         TRANSFER                                                   2,100.00              8,384.00',
+  ]),
+  hsbcPage(2, [
+    '                               TRANSFER',
+    '                               TO 4111 1111 1111 1234',
+    '                               Bill payment',
+    '                               HIB- 1111111X1111111',
+    '            09/11/2026         TRANSFER                                                     442.00             10,484.00',
+    '                               TRANSFER',
+    '                               UPI20261109000000002',
+    '                               631000000002',
+    '                               ZOMATO LIMITED',
+    '                               U@0000002',
+    '            08/11/2026         TRANSFER                              50,000.00                                 10,926.00',
+    '                               TRANSFER',
+    '                               ACME000000000001',
+    '                               ACMEN00000000000000001',
+    '                               NEFT FROM SALARY CREDIT Acme Indi',
+    '                               CHAS',
+    '                               2026/11/08 010251 ACME000000000001',
+  ]),
+  hsbcPage(3, [
+    '            07/11/2026         TRANSFER                                                  20,000.00            -39,074.00',
+    '                               TRANSFER',
+    '                               IMPS',
+    '                               625100000003',
+    '                               TEST KUMAR',
+    '                               TEST KUMAR',
+    '            06/11/2026         INTEREST                                120.00                                  -19,074.00',
+    '                               INTEREST',
+    '                               CREDIT INTEREST',
+  ]),
+];
+
+test('statement parser: HSBC savings account layout (credit column first, details on later lines, page breaks)', () => {
+  const r = parseStatementText(HSBC_BANK);
+  assert.equal(r.layout, 'columns');
+  assert.equal(r.account?.name, 'HSBC A/c ••3444');
+  assert.deepEqual(
+    r.transactions.map((t) => [t.date, t.amount, t.direction, t.description, t.kind]),
+    [
+      ['2026-11-11', 1616, 'credit', 'Asha Sharma', 'spend'],
+      ['2026-11-10', 2100, 'debit', 'Card bill payment (card ••1234)', 'transfer'], // details are on the next page
+      ['2026-11-09', 442, 'debit', 'Zomato', 'spend'],
+      ['2026-11-08', 50000, 'credit', 'Salary Credit Acme Indi', 'spend'],
+      ['2026-11-07', 20000, 'debit', 'Own account transfer', 'transfer'],
+      ['2026-11-06', 120, 'credit', 'Interest', 'spend'],
+    ],
+  );
 });

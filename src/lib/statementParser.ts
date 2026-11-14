@@ -201,7 +201,7 @@ const MERCHANTS: MerchantRule[] = [
   // Not spending: money moving between your own accounts, cards and investments.
   { match: /zerodha/i, name: 'Zerodha', category: 'cat_other', transfer: true },
   { match: /indian clearing|\biccl|nse ?cl|nsccl|clearing corp/i, name: 'Investments (clearing corp.)', category: 'cat_other', transfer: true },
-  { match: /credit card|card payment|cc payment|cc bill|billdesk.*card|autopay.*card/i, name: '', category: 'cat_other', transfer: true },
+  { match: /credit card|card payment|cc payment|cc bill|billdesk.*card|autopay.*card/i, name: 'Card bill payment', category: 'cat_other', transfer: true },
   { match: /\bsip\b|mutual fund|groww|upstox|\bnach\b|\bemi\b|loan|\bfd\b|fixed deposit|\brd\b|ppf|nps|self transfer|own account/i, name: '', category: 'cat_other', transfer: true },
 ];
 
@@ -275,13 +275,23 @@ export function detectHolder(text: string): string | null {
 
 /** Special bank narrations and the counterparty name inside UPI / IMPS / NEFT / FT / TPT ones. */
 function readBankNarration(raw: string): { special?: Classified; name?: string } {
-  const s = raw.trim();
+  // HSBC net banking repeats the type: "TRANSFER TRANSFER UPI2026… …". Keep a reversal marker.
+  const reversal = /^TRANSFER REVERSAL\b/i.test(raw.trim());
+  const s = raw.trim().replace(/^(?:TRANSFER(?: REVERSAL)?\s+)+/i, '');
+  // Card bill paid to a card number ("TO 4111 1111 1111 1234 Bill payment") or a biller ("TO BDS:SBICARD").
+  const toCard = s.match(/^TO\s+((?:\d{4}\s?){3}(\d{4}))\b/i);
+  if (toCard || /^TO BDS:\s*\w*CARD/i.test(s)) {
+    const bank = CARD_HINTS.find(([re]) => re.test(s))?.[1];
+    const which = toCard ? ` (card ••${toCard[2]})` : bank ? ` (${bank})` : '';
+    return { special: { description: `Card bill payment${which}`, category: 'cat_other', transfer: true } };
+  }
+  if (/^ATM\b/i.test(s)) return { special: { description: 'ATM cash withdrawal', category: 'cat_other', transfer: false } };
   // Card bill paid from the bank: "SI HGALP0284E0180378007 HSBC CR-08/05/26", "HGALP…-ICICICREDIT-BILLPAY"
   if (/^SI\s+HG[A-Z0-9]+\s/i.test(s) || (/BILLPAY/i.test(s) && /CRE|CARD/i.test(s))) {
     const bank = CARD_HINTS.find(([re]) => re.test(s))?.[1];
     return { special: { description: `Card bill payment${bank ? ` (${bank})` : ''}`, category: 'cat_other', transfer: true } };
   }
-  if (/^INTEREST PAID/i.test(s)) return { special: { description: 'Interest', category: 'cat_other', transfer: false } };
+  if (/^INTEREST\b/i.test(s)) return { special: { description: 'Interest', category: 'cat_other', transfer: false } };
   if (/^CBDT\b/i.test(s)) return { special: { description: 'Income tax (CBDT)', category: 'cat_other', transfer: false } };
   if (/^UPIRET/i.test(s)) return { special: { description: 'UPI refund', category: 'cat_other', transfer: false } };
   if (/^CHQ DEP/i.test(s)) return { special: { description: 'Cheque deposit', category: 'cat_other', transfer: false } };
@@ -302,9 +312,21 @@ function readBankNarration(raw: string): { special?: Classified; name?: string }
     s.match(/^FT-[^-]*-IMPS TRANSACTION-([^-]+)/i)?.[1] ??
     s.match(/^NEFT (?:CR|DR)-[A-Z]{4}0[A-Z0-9]{6}-([^-]+)/i)?.[1] ??
     s.match(/^FT-.*?\s-\s(.+?)(?:\s-\s*.*)?$/i)?.[1] ??
-    s.match(/^\d{9,}-TPT-.*-([^-]+)$/i)?.[1];
-  // Drop reference digits left on the name ("ASHA 0123456").
-  const clean = name?.replace(/\s+\d{4,}\s*$/, '').trim();
+    s.match(/^\d{9,}-TPT-.*-([^-]+)$/i)?.[1] ??
+    // HSBC: "UPI2026… <ref> <payee> [null/null] [UPI] U@123", "IMPS <ref> <payee>", "… NEFT FROM <payer> <IFSC>",
+    // "LP … HIB- <ref> <remark / payee> HSBCN…"
+    s.match(/^UPI\d{11,}\s+\d{9,}\s+(.+?)\s+(?:null\/null\s+(?:\S+\s+)?)?(?:UPI\s+)?U@\d+/i)?.[1] ??
+    s.match(/^IMPS\s+\d{9,}\s+(.+?)(?:\s+\1)?(?:\s+[A-Z]{4}0[A-Z0-9]{6}\/.*)?$/i)?.[1] ??
+    s.match(/NEFT FROM\s+(.+?)\s+[A-Z]{4}\s+\d{4}\/\d{2}\/\d{2}/i)?.[1] ??
+    s.match(/HIB-\s*\S+\s+(.+?)\s+HSBCN\d+/i)?.[1];
+  if (reversal) {
+    return { special: { description: `Reversal${name ? `: ${titleCase(name)}` : ''}`, category: 'cat_other', transfer: false } };
+  }
+  // Drop reference digits left on the name ("ASHA 0123456"); a bare UPI id becomes its readable part.
+  const clean = name
+    ?.replace(/^([^@\s]+)@\S+$/, (_, id: string) => id.replace(/-\d+$/, ''))
+    .replace(/\s+\d{4,}\s*$/, '')
+    .trim();
   return clean ? { name: clean } : {};
 }
 
@@ -313,11 +335,14 @@ function readBankNarration(raw: string): { special?: Classified; name?: string }
  * `holder` is the account holder's name, so transfers to / from yourself count as transfers.
  */
 export function classify(narration: string, holder: string | null = null): Classified {
+  // Bank formats first, while card numbers are still there to recognise "TO <card number>"
+  // (their descriptions show at most the last 4 digits).
+  const bankFirst = readBankNarration(narration);
+  if (bankFirst.special) return bankFirst.special;
   // Never show card or account numbers in descriptions.
   narration = narration.replace(MASKED_NUMBER, '').replace(/\b\d{4}[ -]?[\dXx*]{4}[ -]?[\dXx*]{4}[ -]?\d{4}\b/g, '').trim();
   if (/^to\s*$/i.test(narration)) return { description: 'Card bill payment', category: 'cat_other', transfer: true };
   const bank = readBankNarration(narration);
-  if (bank.special) return bank.special;
   const found = MERCHANTS.find((r) => r.match.test(narration));
   const rule = found?.processor && bank.name ? undefined : found;
   if (rule?.transfer && rule.name) return { description: rule.name, category: rule.category, transfer: true };
@@ -396,7 +421,7 @@ function readAmountHeader(line: string): number | null {
  * 411111******9012, or SBI Card's XXXX XXXX XXXX XX34 (only the last 2 digits shown).
  */
 const MASKED_NUMBER = /(?:\b\d{2,6}[ -]?(?:[Xx*]{2,}[ -]?){1,4}(\d{4})|(?:\b[Xx*]{4}[ -]?){3}[Xx*]{2}(\d{2}))\b/g;
-const ACCOUNT_NUMBER = /\b(?:a\/c|account)\s*(?:no\.?|number)?\s*[:.-]?\s*([Xx*\d]{6,20}\d{4})\b/gi;
+const ACCOUNT_NUMBER = /\b(?:a\/c|account)\s*(?:no\.?|number)?\s*[:.-]?\s*([Xx*\d][Xx*\d -]{4,24}\d)\b/gi;
 
 const BANKS: [RegExp, string][] = [
   [/\bhsbc\b/gi, 'HSBC'],
@@ -442,11 +467,16 @@ function mostFrequent(values: string[]): string | null {
 
 export function detectAccount(text: string): StatementAccount | null {
   const bank = mostFrequent(BANKS.flatMap(([re, name]) => [...text.matchAll(re)].map(() => name)));
-  const kind: 'card' | 'bank' = /credit card/i.test(text) ? 'card' : 'bank';
+  // Bank statements can mention credit cards in narrations ("credit card bill"); card statements show a credit limit.
+  const kind: 'card' | 'bank' = /credit limit|credit card statement/i.test(text) ? 'card' : 'bank';
   const numbers =
     kind === 'card'
       ? [...text.matchAll(MASKED_NUMBER)].map((m) => m[1] ?? m[2])
-      : [...text.matchAll(ACCOUNT_NUMBER)].map((m) => m[1].slice(-4)).filter((d) => /^\d{4}$/.test(d));
+      : [...text.matchAll(ACCOUNT_NUMBER)]
+          .map((m) => m[1].replace(/[ -]/g, ''))
+          .filter((n) => n.length >= 8)
+          .map((n) => n.slice(-4))
+          .filter((d) => /^\d{4}$/.test(d));
   const last4 = mostFrequent(numbers);
   if (!bank || !last4) return null;
   return {
@@ -486,8 +516,18 @@ export function parseStatementText(pages: string[], today = new Date()): RulePar
   const rows: (Omit<StatementTxn, 'description' | 'kind' | 'category'> & { narration: string; col: number })[] = [];
   let open: (typeof rows)[number] | null = null;
   let continued = 0;
+  // Page headers / footers (lines repeated at the top or bottom of several pages, page
+  // numbers); a wrapped narration can continue after them on the next page.
+  const edgeCounts = new Map<string, number>();
+  for (const page of pages) {
+    const nonEmpty = page.split('\n').map((l) => l.trim()).filter(Boolean);
+    for (const t of new Set([...nonEmpty.slice(0, 3), ...nonEmpty.slice(-3)])) edgeCounts.set(t, (edgeCounts.get(t) ?? 0) + 1);
+  }
+  const isPageFurniture = (t: string) =>
+    (edgeCounts.get(t) ?? 0) >= 3 || /about:blank|page\s*(?:no\.?)?\s*:?\s*\d+\b|\b\d+\s*\/\s*\d+\s*$/i.test(t);
   let lastPieceLength = 0;
   for (const line of lines) {
+    if (isPageFurniture(line.trim())) continue;
     const d = readRowDateAt(line, dateCol);
     if (!d) {
       // Bank statements wrap long narrations onto the next lines, starting in
@@ -496,7 +536,7 @@ export function parseStatementText(pages: string[], today = new Date()): RulePar
       const text = line.trim();
       if (
         open &&
-        continued < 3 &&
+        continued < 6 &&
         text &&
         text.length <= 60 &&
         Math.abs(indent - open.col) <= 4 &&
@@ -508,7 +548,7 @@ export function parseStatementText(pages: string[], today = new Date()): RulePar
         open.narration += (lastPieceLength >= 38 ? '' : ' ') + text;
         lastPieceLength = text.length;
         continued++;
-      } else if (text) {
+      } else if (text && !isPageFurniture(text)) {
         open = null;
       }
       continue;
