@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import { supabase } from '../lib/supabase';
+import { describeNetworkError, supabase, SUPABASE_URL_PROBLEM } from '../lib/supabase';
 import { Button, Card, Chip, Field, styles } from '../components/ui';
 
 export default function LoginScreen() {
@@ -17,12 +17,15 @@ export default function LoginScreen() {
     if (!email.trim() || password.length < 6) {
       return Alert.alert('Check your details', 'Enter your email and a password of at least 6 characters.');
     }
+    if (SUPABASE_URL_PROBLEM) return Alert.alert('Supabase is not set up correctly', SUPABASE_URL_PROBLEM);
     setBusy(true);
     const creds = { email: email.trim(), password };
     const { data, error } =
       mode === 'signin' ? await sb.auth.signInWithPassword(creds) : await sb.auth.signUp(creds);
     setBusy(false);
-    if (error) return Alert.alert(mode === 'signin' ? 'Sign in failed' : 'Sign up failed', error.message);
+    if (error) {
+      return Alert.alert(mode === 'signin' ? 'Sign in failed' : 'Sign up failed', describeNetworkError(error.message));
+    }
     if (mode === 'signup' && !data.session) {
       Alert.alert('Confirm your email', 'We sent you a confirmation link. Open it, then sign in here.');
       setMode('signin');

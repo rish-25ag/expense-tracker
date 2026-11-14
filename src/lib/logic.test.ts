@@ -6,6 +6,7 @@ import { parseDate, addMonths } from './dates.ts';
 import { parseCSV, toCSV, parseExpenseCSV } from './csv.ts';
 import { balances, myShare, validateShares } from './split.ts';
 import { buildReview, type StatementTxn } from './statementReview.ts';
+import { supabaseHost, supabaseUrlProblem } from './supabaseUrl.ts';
 
 test('formatINR uses Indian digit grouping', () => {
   assert.equal(formatINR(1234567), '₹12,34,567');
@@ -114,4 +115,18 @@ test('statement review: debits only, transfers and duplicates unselected', () =>
       ['2026-11-01', 485, true, false],
     ],
   );
+});
+
+test('supabase URL checks catch common setup mistakes', () => {
+  assert.equal(supabaseUrlProblem('https://abcdefghijklmnop.supabase.co'), null);
+  assert.equal(supabaseUrlProblem('https://abcdefghijklmnop.supabase.co/'), null);
+  assert.equal(supabaseUrlProblem(undefined), null);
+  assert.match(supabaseUrlProblem('https://your-project-ref.supabase.co')!, /example value/);
+  assert.match(supabaseUrlProblem('https://supabase.com/dashboard/project/abcd')!, /dashboard/);
+  assert.match(supabaseUrlProblem('https://abcd.supabase.co/rest/v1')!, /remove "\/rest\/v1"/);
+  assert.match(supabaseUrlProblem('"https://abcd.supabase.co"')!, /quotes/);
+  assert.match(supabaseUrlProblem('https://abcd.supabase.co ')!, /spaces/);
+  assert.match(supabaseUrlProblem('http://abcd.supabase.co')!, /https/);
+  assert.match(supabaseUrlProblem('abcd.supabase.co')!, /not a valid URL/);
+  assert.equal(supabaseHost('https://abcd.supabase.co'), 'abcd.supabase.co');
 });

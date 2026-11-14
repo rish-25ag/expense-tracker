@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useApp } from '../../lib/store';
-import { supabase } from '../../lib/supabase';
+import { supabase, SUPABASE_HOST, SUPABASE_URL_PROBLEM } from '../../lib/supabase';
 import { exportCSV, importCSV } from '../../lib/csvIO';
 import { Button, Card, SectionTitle, colors, styles } from '../../components/ui';
 
@@ -107,6 +107,12 @@ export default function SettingsScreen() {
           </>
         )}
       </Card>
+
+      {supabase ? (
+        <Text style={[styles.muted, SUPABASE_URL_PROBLEM ? { color: colors.danger } : null]}>
+          {SUPABASE_URL_PROBLEM ?? `Server: ${SUPABASE_HOST}`}
+        </Text>
+      ) : null}
 
       <SectionTitle>Data</SectionTitle>
       <Card>
