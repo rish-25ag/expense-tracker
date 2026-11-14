@@ -7,7 +7,7 @@ import { parseCSV, toCSV, parseExpenseCSV } from './csv.ts';
 import { balances, myShare, validateShares } from './split.ts';
 import { buildReview, type StatementTxn } from './statementReview.ts';
 import { supabaseHost, supabaseUrlProblem } from './supabaseUrl.ts';
-import { classify, detectAccount, parseStatementText, statementEndDate } from './statementParser.ts';
+import { classify, detectAccount, detectHolder, holderVariants, parseStatementText, statementEndDate } from './statementParser.ts';
 
 test('formatINR uses Indian digit grouping', () => {
   assert.equal(formatINR(1234567), '₹12,34,567');
@@ -300,4 +300,56 @@ test('detectAccount: bank and number that appear most often win', () => {
   });
   assert.equal(detectAccount('HDFC BANK Statement of Account\nAccount No : XXXXXXXX5678\nHDFC Bank')?.name, 'HDFC A/c ••5678');
   assert.equal(detectAccount('no bank here'), null);
+});
+
+// Synthetic HDFC savings account layout (invented names, numbers and amounts).
+const HDFC_PAGE = [
+  '                                                                 HDFC BANK  Page No .: 1',
+  '        MR   TEST KUMAR',
+  '        1 SOME ROAD                                                 Account No  : 50100000001234  OTHER',
+  '        From : 01/04/2026         To : 13/11/2026                           Statement of account',
+  '         Date                   Narration                      Chq./Ref.No.     Value Dt  Withdrawal Amt.    Deposit Amt.    Closing Balance',
+  '       01/04/26  UPI-ASHA DEVI                                  0000609100000001  01/04/26                         10,000.00        29,906.36',
+  '               SHARMA-ASHA01@OKAXIS-',
+  '                UTIB0000001-609100000001-UPI',
+  '       03/04/26  UPI-RAMESH SINGH-900000000011@YBL-UTIB0       0000121030000018  03/04/26          360.00                          29,546.36',
+  '                000002-121030000018-UBER',
+  '       11/04/26  UPI-DHRAM-BHARATPE.1A2B3C4D5E123456@        0000121427300033  11/04/26           51.00                          29,495.36',
+  '                UNITYPE-UTIB0000003-121427300033-PAY',
+  '       01/05/26  SI HGALP0000A0000000001 INDUSIN-01/05/26        000000000000000  01/05/26        2,808.00                          26,687.36',
+  '       05/05/26  IMPS-619100000004-TEST KUMAR-HSBC-X              0000619100000004  05/05/26       15,000.00                          11,687.36',
+  '                XXXXXXX1111-IMPS TRANSACTION',
+  '       06/05/26  NEFT CR-YESB0000001-ZERODHA BROKING           Y   0000000000000005  06/05/26                          5,000.00        16,687.36',
+  '                LTD-',
+  '       07/05/26  ACH C- ACME INFRA PROJECTS-12345678            0000000000000006  07/05/26                            120.00        16,807.36',
+  '       30/06/26  INTEREST PAID TILL 30-JUN-2026                   0000000000000007  30/06/26                            210.50        17,017.86',
+  '      HDFC BANK LIMITED',
+  '      HDFC Bank GSTIN number details',
+  '               STATEMENT SUMMARY :-',
+].join('\n');
+
+test('statement parser: HDFC savings account layout', () => {
+  const r = parseStatementText([HDFC_PAGE]);
+  assert.equal(r.layout, 'columns');
+  assert.equal(r.account?.name, 'HDFC A/c ••1234');
+  assert.deepEqual(
+    r.transactions.map((t) => [t.date, t.amount, t.direction, t.description, t.category, t.kind]),
+    [
+      ['2026-04-01', 10000, 'credit', 'Asha Devi Sharma', 'cat_other', 'spend'], // surname joined from the wrapped line
+      ['2026-04-03', 360, 'debit', 'Uber', 'cat_transport', 'spend'], // the UPI note on the wrapped line says UBER
+      ['2026-04-11', 51, 'debit', 'Dhram', 'cat_other', 'spend'], // long digits in the narration must not drop the row
+      ['2026-05-01', 2808, 'debit', 'Card bill payment (IndusInd)', 'cat_other', 'transfer'],
+      ['2026-05-05', 15000, 'debit', 'Own account transfer', 'cat_other', 'transfer'],
+      ['2026-05-06', 5000, 'credit', 'Zerodha', 'cat_other', 'transfer'],
+      ['2026-05-07', 120, 'credit', 'Dividend: Acme Infra Projects', 'cat_other', 'spend'],
+      ['2026-06-30', 210.5, 'credit', 'Interest', 'cat_other', 'spend'],
+    ],
+  );
+});
+
+test('account holder detection and name variants', () => {
+  assert.equal(detectHolder('        MR   TEST KUMAR\n  address'), 'TEST KUMAR');
+  assert.deepEqual(holderVariants('TEST KUMAR'), ['TEST KUMAR', 'KUMAR TEST', 'KUMAR T', 'T KUMAR']);
+  assert.equal(classify('UPI-KUMAR T-TK@OKAXIS-UTIB0000001-123456789012-UPI', 'TEST KUMAR').description, 'Own account transfer');
+  assert.equal(classify('UPI-KUMAR TRADERS-KT@OKAXIS-UTIB0000001-123456789012-UPI', 'TEST KUMAR').transfer, false);
 });

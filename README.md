@@ -93,7 +93,8 @@ To update the function later, run step 3 again. Changes to how transactions are 
 
 ### Supported layouts and limits
 
-- Tested on real credit card statements from **HSBC, Axis, ICICI, SBI Card and IndusInd**, with totals matching each statement's own summary, and on bank statements with Date / Withdrawal / Deposit columns (HDFC style). Other banks using similar layouts should work. If a statement shows "No transactions were recognised", its layout needs a new rule.
+- Tested on real statements, with totals matching each statement's own summary: credit cards from **HSBC, Axis, ICICI, SBI Card and IndusInd**, and an **HDFC savings account** (44 pages, 535 transactions). Other banks with similar layouts should work. If a statement shows "No transactions were recognised", its layout needs a new rule.
+- Bank account statements: wrapped UPI / IMPS / NEFT narrations are joined and reduced to the payee's name, and the UPI note (e.g. `UBER`, `METRO`) helps pick a category. Card bill payments (`SI … AXIS BA`, `…CREDIT-BILLPAY`), transfers to or from your own name, and investments (Zerodha, clearing corporations, SIPs) are marked as transfers so they start unticked. Dividends, interest and income tax get clear names.
 - To add or fix a merchant name or category, edit the `MERCHANTS` list in `src/lib/statementParser.ts`.
 - PDFs up to 10 MB. The PDF must contain text, as statements from net banking or bank emails do. Scanned or photographed statements are rejected with a message.
 

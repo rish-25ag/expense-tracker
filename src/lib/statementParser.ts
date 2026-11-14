@@ -137,6 +137,8 @@ interface MerchantRule {
   name: string;
   category: string; // category id
   transfer?: boolean;
+  /** A payment app (Paytm, PhonePe...): when the narration names the actual payee, show the payee instead. */
+  processor?: boolean;
 }
 
 /** Known merchants: tidy name and default category. First match wins. */
@@ -156,7 +158,7 @@ const MERCHANTS: MerchantRule[] = [
   { match: /rapido|roppen/i, name: 'Rapido', category: 'cat_transport' },
   { match: /irctc/i, name: 'IRCTC', category: 'cat_travel' },
   { match: /indigo|interglobe/i, name: 'IndiGo', category: 'cat_travel' },
-  { match: /air india|vistara/i, name: 'Air India', category: 'cat_travel' },
+  { match: /air ?india|vistara/i, name: 'Air India', category: 'cat_travel' },
   { match: /makemytrip|make my trip/i, name: 'MakeMyTrip', category: 'cat_travel' },
   { match: /ibibo|goibibo/i, name: 'Goibibo', category: 'cat_travel' },
   { match: /easy ?trip|easemytrip/i, name: 'EaseMyTrip', category: 'cat_travel' },
@@ -185,7 +187,7 @@ const MERCHANTS: MerchantRule[] = [
   { match: /vodafone|\bvi\b/i, name: 'Vi', category: 'cat_rent' },
   { match: /bescom|tata power|adani electricity|bses|msedcl|electricity/i, name: 'Electricity bill', category: 'cat_rent' },
   { match: /pharma|pharmacy|medplus|apollo|1mg|netmeds|pharmeasy|\bhospital\b|\bclinic\b|diagnostic/i, name: '', category: 'cat_health' },
-  { match: /one97|paytm/i, name: 'Paytm', category: 'cat_other' },
+  { match: /one97|paytm/i, name: 'Paytm', category: 'cat_other', processor: true },
   { match: /restaurant|cafe|caf[eé]|dhaba|bakery|kitchen|hospitality|food|biryani|pizza|domino|mcdonald|kfc|starbucks|chaayos/i, name: '', category: 'cat_food' },
   { match: /fuel|petrol|hpcl|bpcl|indian oil|iocl|shell/i, name: '', category: 'cat_transport' },
   { match: /alcobev|liquor|wines|beer/i, name: '', category: 'cat_fun' },
@@ -195,9 +197,12 @@ const MERCHANTS: MerchantRule[] = [
   { match: /\bairlines?\b|\bhotels?\b|travel agenc/i, name: '', category: 'cat_travel' },
   { match: /\bdrug stores?\b|\bmedical\b/i, name: '', category: 'cat_health' },
   { match: /service station|\btelecom|utilit/i, name: '', category: 'cat_rent' },
+  { match: /dmrc|delhi metro|\bmetro\b/i, name: 'Metro', category: 'cat_transport' },
   // Not spending: money moving between your own accounts, cards and investments.
+  { match: /zerodha/i, name: 'Zerodha', category: 'cat_other', transfer: true },
+  { match: /indian clearing|\biccl|nse ?cl|nsccl|clearing corp/i, name: 'Investments (clearing corp.)', category: 'cat_other', transfer: true },
   { match: /credit card|card payment|cc payment|cc bill|billdesk.*card|autopay.*card/i, name: '', category: 'cat_other', transfer: true },
-  { match: /\bsip\b|mutual fund|zerodha|groww|upstox|\bnach\b|\bemi\b|loan|\bfd\b|fixed deposit|\brd\b|ppf|nps|self transfer|own account/i, name: '', category: 'cat_other', transfer: true },
+  { match: /\bsip\b|mutual fund|groww|upstox|\bnach\b|\bemi\b|loan|\bfd\b|fixed deposit|\brd\b|ppf|nps|self transfer|own account/i, name: '', category: 'cat_other', transfer: true },
 ];
 
 /** Payment-processor prefixes and UPI wrappers around the real merchant name. */
@@ -227,20 +232,110 @@ function titleCase(s: string): string {
   return s
     .toLowerCase()
     .replace(/\b([a-z])/g, (c) => c.toUpperCase())
-    .replace(/\b(Private|Limited|Pvt|Ltd|Limit|Limi|Lim|Li|Pv|P|Llp|Inc|Co)\b\.?/gi, '')
+    .replace(/\b(Private|Privat|Priva|Limited|Pvt|Ltd|Limit|Limi|Lim|Li|Pv|P|Llp|Inc|Co)\b\.?/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
-/** Clean merchant name, category id and transfer flag for a raw narration. */
-export function classify(narration: string): { description: string; category: string; transfer: boolean } {
+// ---------- bank account narrations (UPI, IMPS, NEFT, standing instructions...) ----------
+
+/** Which card a bank-side card bill payment went to, from hints like "INDUSIN", "SBI CAR", "HSBC CR". */
+const CARD_HINTS: [RegExp, string][] = [
+  [/indusin/i, 'IndusInd'],
+  [/sbi ?car/i, 'SBI Card'],
+  [/hsbc/i, 'HSBC'],
+  [/axis/i, 'Axis'],
+  [/icici/i, 'ICICI'],
+  [/hdfc/i, 'HDFC'],
+  [/kotak/i, 'Kotak'],
+  [/amex|american express/i, 'Amex'],
+];
+
+interface Classified {
+  description: string;
+  category: string;
+  transfer: boolean;
+}
+
+/** Names the account holder may appear as in narrations: "TEST KUMAR", "KUMAR T", "T KUMAR"... */
+export function holderVariants(holder: string | null): string[] {
+  if (!holder) return [];
+  const w = holder.toUpperCase().split(/\s+/).filter(Boolean);
+  if (w.length < 2) return [];
+  const first = w[0];
+  const last = w[w.length - 1];
+  return [...new Set([w.join(' '), `${first} ${last}`, `${last} ${first}`, `${last} ${first[0]}`, `${first[0]} ${last}`])];
+}
+
+/** The account holder's name from the statement header ("MR TEST KUMAR"). */
+export function detectHolder(text: string): string | null {
+  const m = text.match(/\b(?:MR|MRS|MS|MISS|DR)\.?\s{1,4}([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+){1,3})/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/** Special bank narrations and the counterparty name inside UPI / IMPS / NEFT / FT / TPT ones. */
+function readBankNarration(raw: string): { special?: Classified; name?: string } {
+  const s = raw.trim();
+  // Card bill paid from the bank: "SI HGALP0284E0180378007 HSBC CR-08/05/26", "HGALP…-ICICICREDIT-BILLPAY"
+  if (/^SI\s+HG[A-Z0-9]+\s/i.test(s) || (/BILLPAY/i.test(s) && /CRE|CARD/i.test(s))) {
+    const bank = CARD_HINTS.find(([re]) => re.test(s))?.[1];
+    return { special: { description: `Card bill payment${bank ? ` (${bank})` : ''}`, category: 'cat_other', transfer: true } };
+  }
+  if (/^INTEREST PAID/i.test(s)) return { special: { description: 'Interest', category: 'cat_other', transfer: false } };
+  if (/^CBDT\b/i.test(s)) return { special: { description: 'Income tax (CBDT)', category: 'cat_other', transfer: false } };
+  if (/^UPIRET/i.test(s)) return { special: { description: 'UPI refund', category: 'cat_other', transfer: false } };
+  if (/^CHQ DEP/i.test(s)) return { special: { description: 'Cheque deposit', category: 'cat_other', transfer: false } };
+  const ach = s.match(/^ACH C-\s*(.+?)(?:-[A-Z0-9]*\d[A-Z0-9]*)?$/i);
+  if (ach || /\bEQ DIV|\bDIV ?\d{2,4}\b|\bDIVIDEND\b|\bIDV\d/i.test(s)) {
+    const company = (ach ? ach[1] : s)
+      .replace(/^\d+\s+/, '')
+      .replace(/\b(?:EQ\s+)?DIV(?:IDEND)?\b.*$/i, '')
+      .replace(/\bIDV\d.*$/i, '')
+      .replace(/\b(?:LTD|LIMITED|LIMI\w*)\b.*$/i, '')
+      .trim();
+    return { special: { description: company ? `Dividend: ${titleCase(company)}` : 'Dividend', category: 'cat_other', transfer: false } };
+  }
+  const name =
+    // UPI-<payee name>-<upi id>@<bank>-<ifsc>-<ref>-<note>: the payee is the first segment.
+    s.match(/^UPI-(?:AUTOPAY-)?([^-@]+)/i)?.[1] ??
+    s.match(/^IMPS-\d+-([^-]+)/i)?.[1] ??
+    s.match(/^FT-[^-]*-IMPS TRANSACTION-([^-]+)/i)?.[1] ??
+    s.match(/^NEFT (?:CR|DR)-[A-Z]{4}0[A-Z0-9]{6}-([^-]+)/i)?.[1] ??
+    s.match(/^FT-.*?\s-\s(.+?)(?:\s-\s*.*)?$/i)?.[1] ??
+    s.match(/^\d{9,}-TPT-.*-([^-]+)$/i)?.[1];
+  // Drop reference digits left on the name ("ASHA 0123456").
+  const clean = name?.replace(/\s+\d{4,}\s*$/, '').trim();
+  return clean ? { name: clean } : {};
+}
+
+/**
+ * Clean description, category id and transfer flag for a raw narration.
+ * `holder` is the account holder's name, so transfers to / from yourself count as transfers.
+ */
+export function classify(narration: string, holder: string | null = null): Classified {
   // Never show card or account numbers in descriptions.
   narration = narration.replace(MASKED_NUMBER, '').replace(/\b\d{4}[ -]?[\dXx*]{4}[ -]?[\dXx*]{4}[ -]?\d{4}\b/g, '').trim();
   if (/^to\s*$/i.test(narration)) return { description: 'Card bill payment', category: 'cat_other', transfer: true };
-  const rule = MERCHANTS.find((r) => r.match.test(narration));
+  const bank = readBankNarration(narration);
+  if (bank.special) return bank.special;
+  const found = MERCHANTS.find((r) => r.match.test(narration));
+  const rule = found?.processor && bank.name ? undefined : found;
+  if (rule?.transfer && rule.name) return { description: rule.name, category: rule.category, transfer: true };
+  const variants = holderVariants(holder);
+  // Full names ("TEST KUMAR", "KUMAR TEST") may appear anywhere in the narration;
+  // short forms ("KUMAR T") only count when they are the whole payee name.
+  const fullNames = variants.filter((v) => v.split(' ').every((p) => p.length > 1));
+  const counterparty = bank.name?.toUpperCase().replace(/\s+/g, ' ').trim();
+  const upper = narration.toUpperCase();
+  if (
+    (counterparty && variants.includes(counterparty)) ||
+    fullNames.some((v) => new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(upper))
+  ) {
+    return { description: 'Own account transfer', category: 'cat_other', transfer: true };
+  }
   // The layout separates PDF text pieces by 2+ spaces; the first piece is the
   // merchant, the rest is usually city / country.
-  const merchant = stripPlaces(stripNoise(narration.split(/\s{2,}/)[0].split(',')[0]));
+  const merchant = bank.name ?? stripPlaces(stripNoise(narration.split(/\s{2,}/)[0].split(',')[0]));
   const description = rule?.name || titleCase(merchant) || narration.trim();
   return { description, category: rule?.category ?? 'cat_other', transfer: !!rule?.transfer };
 }
@@ -387,10 +482,39 @@ export function parseStatementText(pages: string[], today = new Date()): RulePar
   const dateCol = headerLine ? dateColumnStart(headerLine) : null;
   const account = detectAccount(all);
 
-  const out: StatementTxn[] = [];
+  const holder = detectHolder(pages[0] ?? '');
+  const rows: (Omit<StatementTxn, 'description' | 'kind' | 'category'> & { narration: string; col: number })[] = [];
+  let open: (typeof rows)[number] | null = null;
+  let continued = 0;
+  let lastPieceLength = 0;
   for (const line of lines) {
     const d = readRowDateAt(line, dateCol);
-    if (!d) continue;
+    if (!d) {
+      // Bank statements wrap long narrations onto the next lines, starting in
+      // the narration column: append them to the row above.
+      const indent = line.length - line.trimStart().length;
+      const text = line.trim();
+      if (
+        open &&
+        continued < 3 &&
+        text &&
+        text.length <= 60 &&
+        Math.abs(indent - open.col) <= 4 &&
+        !amountsIn(line).length &&
+        !NOT_A_TXN.test(text) &&
+        !/page no|statement summary|bank limited|closing balance/i.test(text)
+      ) {
+        // A piece filling the whole column was cut mid-word: join without a space.
+        open.narration += (lastPieceLength >= 38 ? '' : ' ') + text;
+        lastPieceLength = text.length;
+        continued++;
+      } else if (text) {
+        open = null;
+      }
+      continue;
+    }
+    open = null;
+    continued = 0;
     const rest = line.slice(d.length);
     if (NOT_A_TXN.test(rest) || PERIOD_REST.test(rest)) continue;
     const amounts = amountsIn(rest).map((a) => ({ ...a, start: a.start + d.length, end: a.end + d.length }));
@@ -435,14 +559,25 @@ export function parseStatementText(pages: string[], today = new Date()): RulePar
     }
 
     // Narration: text between the date and the first amount, minus reference /
-    // serial numbers before or after it (ICICI prints a serial number first).
-    const narration = line
-      .slice(d.length, narrationEnd)
-      .replace(/\s{2,}\d{6,}\s*$/, '')
-      .replace(/^\s*\d{6,}\s+/, '')
-      .trim();
+    // serial numbers and value dates around it (ICICI prints a serial number first,
+    // HDFC a reference number and value date after).
+    let narration = line.slice(d.length, narrationEnd).trim().replace(/^\d{6,}\s+/, '');
+    let prev;
+    do {
+      prev = narration;
+      narration = narration.replace(/\s{2,}(?:\S*\d{6,}\S*|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\s*$/, '');
+    } while (narration !== prev);
+    narration = narration.trim();
     if (!narration) continue;
-    const c = classify(narration);
+    const row = { date, amount, direction, narration, col: line.length - line.slice(d.length).trimStart().length };
+    rows.push(row);
+    open = row;
+    lastPieceLength = narration.length;
+  }
+
+  const out: StatementTxn[] = [];
+  for (const { date, amount, direction, narration } of rows) {
+    const c = classify(narration, holder);
     // On a card statement, money coming in that is a payment (not a refund or
     // cashback) is you paying the bill: a transfer, not income.
     const cardPayment =
