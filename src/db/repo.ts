@@ -103,6 +103,43 @@ export async function listExpenses(db: SQLiteDatabase, month?: string): Promise<
   return rows.map(toExpense);
 }
 
+/** Entries dated from `start` to `end` (inclusive, YYYY-MM-DD). Newest first. */
+export async function listExpensesBetween(db: SQLiteDatabase, start: string, end: string): Promise<Expense[]> {
+  const rows = await db.getAllAsync<ExpenseRow>(
+    `SELECT ${EXPENSE_COLS} FROM expenses WHERE deleted = 0 AND date >= ? AND date <= ?
+     ORDER BY date DESC, updated_at DESC`,
+    start, end,
+  );
+  return rows.map(toExpense);
+}
+
+/** Spend per category from `start` to `end`, counting only my share of split bills (credits excluded). */
+export async function spendByCategoryBetween(db: SQLiteDatabase, start: string, end: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const e of await listExpensesBetween(db, start, end)) {
+    if (e.type !== 'expense') continue;
+    const k = e.categoryId ?? '';
+    out[k] = round2((out[k] ?? 0) + myShare(e));
+  }
+  return out;
+}
+
+/** Total spend (my share, credits excluded) for each date range, keyed by `key`. */
+export async function spendByRanges(
+  db: SQLiteDatabase,
+  ranges: { key: string; start: string; end: string }[],
+): Promise<Record<string, number>> {
+  if (!ranges.length) return {};
+  const from = ranges.reduce((m, r) => (r.start < m ? r.start : m), ranges[0].start);
+  const to = ranges.reduce((m, r) => (r.end > m ? r.end : m), ranges[0].end);
+  const out: Record<string, number> = Object.fromEntries(ranges.map((r) => [r.key, 0]));
+  for (const e of await listExpensesBetween(db, from, to)) {
+    if (e.type !== 'expense') continue;
+    for (const r of ranges) if (e.date >= r.start && e.date <= r.end) out[r.key] = round2(out[r.key] + myShare(e));
+  }
+  return out;
+}
+
 export async function getExpense(db: SQLiteDatabase, id: string): Promise<Expense | null> {
   const r = await db.getFirstAsync<ExpenseRow>(
     `SELECT ${EXPENSE_COLS} FROM expenses WHERE id = ? AND deleted = 0`,

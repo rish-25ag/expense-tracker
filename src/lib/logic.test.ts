@@ -8,6 +8,7 @@ import { balances, myShare, validateShares } from './split.ts';
 import { buildReview, type StatementTxn } from './statementReview.ts';
 import { supabaseHost, supabaseUrlProblem } from './supabaseUrl.ts';
 import { classify, detectAccount, detectHolder, holderVariants, parseStatementText, statementEndDate } from './statementParser.ts';
+import { daysElapsed, isLatest, periodContaining, periodLabel, selectedBucketIndex, shiftPeriod, trendBuckets } from './period.ts';
 
 test('formatINR uses Indian digit grouping', () => {
   assert.equal(formatINR(1234567), '₹12,34,567');
@@ -424,4 +425,45 @@ test('statement parser: HSBC savings account layout (credit column first, detail
       ['2026-11-06', 120, 'credit', 'Interest', 'spend'],
     ],
   );
+});
+
+test('periods: week (Mon–Sun), month, year, custom', () => {
+  // 2026-11-16 is a Monday
+  assert.deepEqual(periodContaining('week', '2026-11-18'), { kind: 'week', start: '2026-11-16', end: '2026-11-22' });
+  assert.deepEqual(periodContaining('week', '2026-11-16'), { kind: 'week', start: '2026-11-16', end: '2026-11-22' });
+  assert.deepEqual(periodContaining('week', '2026-11-22'), { kind: 'week', start: '2026-11-16', end: '2026-11-22' });
+  assert.deepEqual(periodContaining('month', '2026-02-10'), { kind: 'month', start: '2026-02-01', end: '2026-02-28' });
+  assert.deepEqual(periodContaining('year', '2026-07-04'), { kind: 'year', start: '2026-01-01', end: '2026-12-31' });
+  assert.equal(shiftPeriod(periodContaining('week', '2026-01-01'), -1).start, '2025-12-22');
+  assert.equal(shiftPeriod(periodContaining('month', '2026-01-15'), -1).start, '2025-12-01');
+  assert.deepEqual(shiftPeriod({ kind: 'custom', start: '2026-11-01', end: '2026-11-10' }, -1), {
+    kind: 'custom', start: '2026-10-22', end: '2026-10-31',
+  });
+  assert.equal(periodLabel(periodContaining('week', '2026-11-18')), '16–22 Nov 2026');
+  assert.equal(periodLabel(periodContaining('week', '2026-12-30')), '28 Dec 2026 – 3 Jan 2027');
+  assert.equal(periodLabel(periodContaining('month', '2026-11-18')), 'Nov 2026');
+  assert.equal(periodLabel(periodContaining('year', '2026-11-18')), '2026');
+  assert.equal(periodLabel({ kind: 'custom', start: '2026-10-25', end: '2026-11-03' }), '25 Oct – 3 Nov 2026');
+  assert.equal(isLatest(periodContaining('month', '2026-11-18'), '2026-11-18'), true);
+  assert.equal(isLatest(periodContaining('month', '2026-10-18'), '2026-11-18'), false);
+  assert.equal(daysElapsed(periodContaining('month', '2026-11-01'), '2026-11-16'), 16);
+  assert.equal(daysElapsed(periodContaining('month', '2026-10-01'), '2026-11-16'), 31);
+});
+
+test('periods: trend chart buckets', () => {
+  const week = trendBuckets(periodContaining('week', '2026-11-18'));
+  assert.deepEqual(week.map((b) => b.label), ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+  const month = trendBuckets(periodContaining('month', '2026-02-10'));
+  assert.deepEqual(month.map((b) => b.title), ['Sep 2025', 'Oct 2025', 'Nov 2025', 'Dec 2025', 'Jan 2026', 'Feb 2026']);
+  assert.equal(month[3].end, '2025-12-31');
+  assert.equal(trendBuckets(periodContaining('year', '2026-05-05')).length, 12);
+  assert.equal(trendBuckets({ kind: 'custom', start: '2026-11-01', end: '2026-11-10' }).length, 10);
+  assert.deepEqual(
+    trendBuckets({ kind: 'custom', start: '2026-09-15', end: '2026-11-10' }).map((b) => b.label),
+    ['Sep', 'Oct', 'Nov'],
+  );
+  const year = periodContaining('year', '2026-11-16');
+  assert.equal(selectedBucketIndex(year, trendBuckets(year), '2026-11-16'), 10); // Nov, not the empty December
+  const lastYear = periodContaining('year', '2025-05-05');
+  assert.equal(selectedBucketIndex(lastYear, trendBuckets(lastYear), '2026-11-16'), 11);
 });

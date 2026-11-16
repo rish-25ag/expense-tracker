@@ -31,7 +31,8 @@ export default function BudgetsScreen() {
   const commit = async () => {
     if (!editing) return;
     const v = draft.trim() === '' ? 0 : parseAmount(draft);
-    if (Number.isNaN(v) || v < 0) return Alert.alert('Invalid amount', 'Enter a monthly limit in rupees, or leave it empty to remove.');
+    if (Number.isNaN(v) || v < 0)
+      return Alert.alert('Invalid amount', 'Enter a monthly limit in rupees, or leave it empty to remove.');
     await setBudget(db, editing, v);
     setEditing(null);
     changed();
@@ -53,6 +54,22 @@ export default function BudgetsScreen() {
           ) : (
             <Text style={{ color: colors.primary }}>Set budget</Text>
           )}
+          {limit && !isEditing ? (
+            <Pressable
+              hitSlop={8}
+              onPress={() => startEdit(c.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${c.name} budget`}
+              style={{
+                backgroundColor: colors.primarySoft,
+                borderRadius: 999,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+              }}
+            >
+              <Text style={{ color: colors.primary, fontWeight: '600' }}>✏️ Edit</Text>
+            </Pressable>
+          ) : null}
         </Pressable>
         {limit && !isEditing ? (
           <>
@@ -91,7 +108,8 @@ export default function BudgetsScreen() {
         <Card>
           <Text style={styles.muted}>Budgeted categories</Text>
           <Text style={styles.big}>
-            {formatINR(totalSpent)} <Text style={{ fontSize: 16, color: colors.muted }}>of {formatINR(totalBudget)}</Text>
+            {formatINR(totalSpent)}{' '}
+            <Text style={{ fontSize: 16, color: colors.muted }}>of {formatINR(totalBudget)}</Text>
           </Text>
           <ProgressBar value={totalSpent} max={totalBudget} />
         </Card>
@@ -108,7 +126,9 @@ export default function BudgetsScreen() {
       {withBudget.map(renderRow)}
       {withoutBudget.length ? <SectionTitle>No budget</SectionTitle> : null}
       {withoutBudget.map(renderRow)}
-      <Text style={styles.muted}>Budgets repeat every month. Leave the amount empty to remove one.</Text>
+      <Text style={styles.muted}>
+        Budgets repeat every month. Tap ✏️ Edit to change one; clear the amount and save to remove it.
+      </Text>
     </ScrollView>
   );
 }

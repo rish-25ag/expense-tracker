@@ -2,16 +2,22 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, SectionList, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery } from '../../lib/store';
-import { listAccounts, listBudgets, listCategories, listExpenses, listPeople } from '../../db/repo';
+import { listAccounts, listBudgets, listCategories, listExpensesBetween, listPeople } from '../../db/repo';
 import { myShare } from '../../lib/split';
 import { formatINR, round2 } from '../../lib/money';
-import { currentMonth, dayLabel } from '../../lib/dates';
+import { dayLabel, today } from '../../lib/dates';
+import { periodContaining, periodLabel, type Period } from '../../lib/period';
 import { ME, type Expense } from '../../lib/types';
-import { Card, Chip, Empty, MonthSwitcher, ProgressBar, colors, styles } from '../../components/ui';
+import { Card, Chip, Empty, ProgressBar, colors, styles } from '../../components/ui';
+import { PeriodSwitcher } from '../../components/PeriodSwitcher';
 
 export default function ExpensesScreen() {
-  const [month, setMonth] = useState(currentMonth());
-  const expenses = useQuery((db) => listExpenses(db, month), [month], [] as Expense[]);
+  const [period, setPeriod] = useState<Period>(() => periodContaining('month', today()));
+  const expenses = useQuery(
+    (db) => listExpensesBetween(db, period.start, period.end),
+    [period.start, period.end],
+    [] as Expense[],
+  );
   const categories = useQuery(listCategories, [], []);
   const people = useQuery(listPeople, [], []);
   const budgets = useQuery(listBudgets, [], []);
@@ -19,6 +25,8 @@ export default function ExpensesScreen() {
   /** null = all accounts. */
   const [accountId, setAccountId] = useState<string | null>(null);
   const acctById = useMemo(() => Object.fromEntries(accounts.map((a) => [a.id, a])), [accounts]);
+  // Budgets are monthly, so they're shown when a calendar month is selected.
+  const showBudgets = period.kind === 'month' && !accountId;
 
   const catById = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c])), [categories]);
   const nameById = useMemo(() => Object.fromEntries(people.map((p) => [p.id, p.name])), [people]);
@@ -43,7 +51,13 @@ export default function ExpensesScreen() {
     return {
       total: round2(t),
       credited: round2(c),
-      sections: [...byDay.entries()].map(([date, data]) => ({ date, data })),
+      sections: [...byDay.entries()].map(([date, data]) => ({
+        date,
+        data,
+        // Day totals: my share of expenses, and credits separately.
+        spent: round2(data.filter((e) => e.type !== 'credit').reduce((a, e) => a + myShare(e), 0)),
+        credited: round2(data.filter((e) => e.type === 'credit').reduce((a, e) => a + e.amount, 0)),
+      })),
       over: budgets.filter((b) => (byCat[b.categoryId] ?? 0) > b.amount && catById[b.categoryId]),
       // Compare budgets only against spending in the categories that have one.
       budgetedSpent: round2(
@@ -63,7 +77,7 @@ export default function ExpensesScreen() {
         stickySectionHeadersEnabled={false}
         ListHeaderComponent={
           <View style={{ gap: 12 }}>
-            <MonthSwitcher month={month} onChange={setMonth} />
+            <PeriodSwitcher period={period} onChange={setPeriod} />
             {accounts.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
                 <Chip label="All accounts" selected={accountId === null} onPress={() => setAccountId(null)} />
@@ -79,13 +93,14 @@ export default function ExpensesScreen() {
             ) : null}
             <Card>
               <Text style={styles.muted}>
-                {accountId ? `Spent on ${acctById[accountId]?.name ?? 'this account'}` : 'You spent'}
+                {accountId ? `Spent on ${acctById[accountId]?.name ?? 'this account'}` : 'You spent'} ·{' '}
+                {periodLabel(period)}
               </Text>
               <Text style={styles.big}>{formatINR(total)}</Text>
               {credited > 0 ? (
                 <Text style={{ color: colors.success, fontWeight: '600' }}>Credited +{formatINR(credited)}</Text>
               ) : null}
-              {budgetTotal > 0 && !accountId ? (
+              {showBudgets && budgetTotal > 0 ? (
                 <>
                   <ProgressBar value={budgetedSpent} max={budgetTotal} />
                   <Text style={styles.muted}>
@@ -95,8 +110,17 @@ export default function ExpensesScreen() {
                   </Text>
                 </>
               ) : null}
+              {showBudgets ? (
+                <Text
+                  onPress={() => router.navigate('/budgets')}
+                  accessibilityRole="button"
+                  style={{ color: colors.primary, fontWeight: '600' }}
+                >
+                  {budgetTotal > 0 ? '✏️ Edit budgets' : '🎯 Set monthly budgets'}
+                </Text>
+              ) : null}
             </Card>
-            {(accountId ? [] : over).map((b) => (
+            {(showBudgets ? over : []).map((b) => (
               <Pressable key={b.id} onPress={() => router.navigate('/budgets')}>
                 <View
                   style={{
@@ -114,7 +138,16 @@ export default function ExpensesScreen() {
           </View>
         }
         renderSectionHeader={({ section }) => (
-          <Text style={[styles.sectionTitle, { marginTop: 8 }]}>{dayLabel(section.date)}</Text>
+          <View style={[styles.row, { marginTop: 8, justifyContent: 'space-between' }]}>
+            <Text style={styles.sectionTitle}>{dayLabel(section.date)}</Text>
+            <Text style={styles.sectionTitle}>
+              {section.spent > 0 ? formatINR(section.spent) : ''}
+              {section.spent > 0 && section.credited > 0 ? ' · ' : ''}
+              {section.credited > 0 ? (
+                <Text style={{ color: colors.success }}>+{formatINR(section.credited)}</Text>
+              ) : null}
+            </Text>
+          </View>
         )}
         renderItem={({ item: e }) => {
           const cat = e.categoryId ? catById[e.categoryId] : undefined;
@@ -167,7 +200,7 @@ export default function ExpensesScreen() {
         }}
         ListEmptyComponent={
           <Empty
-            title={accountId ? 'Nothing on this account this month' : 'No expenses this month'}
+            title={accountId ? 'Nothing on this account in this period' : 'No expenses in this period'}
             hint="Tap + to add one, or import a statement from Settings."
           />
         }

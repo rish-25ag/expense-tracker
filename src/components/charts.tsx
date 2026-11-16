@@ -3,7 +3,6 @@ import { Pressable, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Line, Path, Text as SvgText } from 'react-native-svg';
 import { colors, styles } from './ui';
 import { formatINR } from '../lib/money';
-import { monthLabel } from '../lib/dates';
 
 /** Bar with only its top corners rounded (4px), anchored to the baseline. */
 function barPath(x: number, y: number, w: number, h: number, r = 4) {
@@ -12,13 +11,22 @@ function barPath(x: number, y: number, w: number, h: number, r = 4) {
   return `M${x},${y + h} V${y + rr} Q${x},${y} ${x + rr},${y} H${x + w - rr} Q${x + w},${y} ${x + w},${y + rr} V${y + h} Z`;
 }
 
+export interface TrendPoint {
+  key: string;
+  /** Short axis label ("Mon", "12", "Nov"). */
+  label: string;
+  /** Full label shown above the chart for the selected bar ("Nov 2026"). */
+  title: string;
+  total: number;
+}
+
 /**
- * Monthly spending, one series. Tap a bar to see its exact value; the
- * selected month (default: the last one) is drawn in full ink, the rest muted.
+ * Spending over time, one series (days or months). Tap a bar to see its exact
+ * value; the selected bar is drawn in full ink, the rest muted.
  */
-export function MonthlyBars({ data }: { data: { month: string; total: number }[] }) {
+export function TrendBars({ data, initial }: { data: TrendPoint[]; initial?: number }) {
   const [width, setWidth] = useState(0);
-  const [sel, setSel] = useState(data.length - 1);
+  const [sel, setSel] = useState(initial ?? data.length - 1);
   const height = 150;
   const top = 8;
   const bottom = 22;
@@ -34,7 +42,7 @@ export function MonthlyBars({ data }: { data: { month: string; total: number }[]
         <Text style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>
           {active ? formatINR(active.total) : '–'}
         </Text>
-        <Text style={styles.muted}>{active ? monthLabel(active.month) : ''}</Text>
+        <Text style={styles.muted}>{active ? active.title : ''}</Text>
       </View>
       <View onLayout={(e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width)} style={{ height }}>
         {width > 0 ? (
@@ -44,12 +52,8 @@ export function MonthlyBars({ data }: { data: { month: string; total: number }[]
               const h = (d.total / max) * plotH;
               const x = i * slot + (slot - barW) / 2;
               return (
-                <React.Fragment key={d.month}>
-                  <Path
-                    d={barPath(x, top + plotH - h, barW, h)}
-                    fill={colors.primary}
-                    opacity={i === sel ? 1 : 0.35}
-                  />
+                <React.Fragment key={d.key}>
+                  <Path d={barPath(x, top + plotH - h, barW, h)} fill={colors.primary} opacity={i === sel ? 1 : 0.35} />
                   <SvgText
                     x={i * slot + slot / 2}
                     y={height - 6}
@@ -58,7 +62,7 @@ export function MonthlyBars({ data }: { data: { month: string; total: number }[]
                     fontWeight={i === sel ? '700' : '400'}
                     textAnchor="middle"
                   >
-                    {monthLabel(d.month, true)}
+                    {data.length > 12 && i % Math.ceil(data.length / 10) !== 0 && i !== sel ? '' : d.label}
                   </SvgText>
                 </React.Fragment>
               );
@@ -69,10 +73,10 @@ export function MonthlyBars({ data }: { data: { month: string; total: number }[]
         <View style={{ position: 'absolute', inset: 0, flexDirection: 'row' }}>
           {data.map((d, i) => (
             <Pressable
-              key={d.month}
+              key={d.key}
               style={{ flex: 1 }}
               onPress={() => setSel(i)}
-              accessibilityLabel={`${monthLabel(d.month)}: ${formatINR(d.total)}`}
+              accessibilityLabel={`${d.title}: ${formatINR(d.total)}`}
             />
           ))}
         </View>

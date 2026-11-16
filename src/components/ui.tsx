@@ -156,7 +156,15 @@ export function Empty({ title, hint }: { title: string; hint?: string }) {
 }
 
 /** Tap to pick a date. Android uses the system dialog, iOS shows an inline calendar. */
-export function DateField({ value, onChange }: { value: string; onChange: (d: string) => void }) {
+export function DateField({
+  value,
+  onChange,
+  label = 'Date',
+}: {
+  value: string;
+  onChange: (d: string) => void;
+  label?: string;
+}) {
   const [showIOS, setShowIOS] = useState(false);
   const [y, m, d] = value.split('-').map(Number);
   const date = new Date(y, m - 1, d);
@@ -172,7 +180,7 @@ export function DateField({ value, onChange }: { value: string; onChange: (d: st
   };
   return (
     <View style={{ gap: 6 }}>
-      <Text style={styles.label}>Date</Text>
+      <Text style={styles.label}>{label}</Text>
       <Pressable onPress={open} style={styles.input}>
         <Text style={{ color: colors.text, fontSize: 16 }}>📅 {dayLabel(value)}</Text>
       </Pressable>
