@@ -14,6 +14,9 @@ export default function LoginScreen() {
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  // The email's link opens a web page to choose a new password; a code works too if the
+  // Supabase email template includes {{ .Token }} (custom SMTP).
+  const [showCode, setShowCode] = useState(false);
 
   const sb = supabase;
   if (!sb) return null;
@@ -25,8 +28,7 @@ export default function LoginScreen() {
     if (SUPABASE_URL_PROBLEM) return Alert.alert('Supabase is not set up correctly', SUPABASE_URL_PROBLEM);
     setBusy(true);
     const creds = { email: email.trim(), password };
-    const { data, error } =
-      mode === 'signin' ? await sb.auth.signInWithPassword(creds) : await sb.auth.signUp(creds);
+    const { data, error } = mode === 'signin' ? await sb.auth.signInWithPassword(creds) : await sb.auth.signUp(creds);
     setBusy(false);
     if (error) {
       return Alert.alert(mode === 'signin' ? 'Sign in failed' : 'Sign up failed', describeNetworkError(error.message));
@@ -42,13 +44,15 @@ export default function LoginScreen() {
   const startReset = () => {
     setMode('reset');
     setResetStep('email');
+    setShowCode(false);
     setCode('');
     setNewPassword('');
     setConfirmPassword('');
   };
 
   const sendResetCode = async () => {
-    if (!/^\S+@\S+\.\S+$/.test(email.trim())) return Alert.alert('Enter your email', 'Use the email you signed up with.');
+    if (!/^\S+@\S+\.\S+$/.test(email.trim()))
+      return Alert.alert('Enter your email', 'Use the email you signed up with.');
     if (SUPABASE_URL_PROBLEM) return Alert.alert('Supabase is not set up correctly', SUPABASE_URL_PROBLEM);
     setBusy(true);
     const { error } = await sb.auth.resetPasswordForEmail(email.trim());
@@ -59,19 +63,25 @@ export default function LoginScreen() {
 
   const setPasswordWithCode = async () => {
     const token = code.replace(/\s/g, '');
-    if (!/^\d{6,10}$/.test(token)) return Alert.alert('Check the code', 'Enter the code from the email (6 or more digits).');
+    if (!/^\d{6,10}$/.test(token))
+      return Alert.alert('Check the code', 'Enter the code from the email (6 or more digits).');
     if (newPassword.length < 6) return Alert.alert('Choose a longer password', 'Use at least 6 characters.');
-    if (newPassword !== confirmPassword) return Alert.alert('Passwords don’t match', 'Type the same new password twice.');
+    if (newPassword !== confirmPassword)
+      return Alert.alert('Passwords don’t match', 'Type the same new password twice.');
     setBusy(true);
     // The code signs you in with a recovery session, which is allowed to set a new password.
     const verified = await sb.auth.verifyOtp({ email: email.trim(), token, type: 'recovery' });
     if (verified.error) {
       setBusy(false);
-      return Alert.alert('That code didn’t work', `${describeNetworkError(verified.error.message)}\n\nCodes expire after a while; you can send a new one.`);
+      return Alert.alert(
+        'That code didn’t work',
+        `${describeNetworkError(verified.error.message)}\n\nCodes expire after a while; you can send a new one.`,
+      );
     }
     const updated = await sb.auth.updateUser({ password: newPassword });
     setBusy(false);
-    if (updated.error) return Alert.alert('Could not set the new password', describeNetworkError(updated.error.message));
+    if (updated.error)
+      return Alert.alert('Could not set the new password', describeNetworkError(updated.error.message));
     Alert.alert('Password changed', 'You’re signed in with your new password.');
     router.back(); // Signed in: AppProvider picks up the session and syncs.
   };
@@ -84,7 +94,7 @@ export default function LoginScreen() {
             <Text style={{ fontSize: 16, fontWeight: '600' }}>Reset your password</Text>
             {resetStep === 'email' ? (
               <>
-                <Text style={styles.muted}>We’ll email you a code to set a new password.</Text>
+                <Text style={styles.muted}>We’ll email you a link to choose a new password.</Text>
                 <Field
                   label="Email"
                   value={email}
@@ -94,14 +104,29 @@ export default function LoginScreen() {
                   keyboardType="email-address"
                   placeholder="you@example.com"
                 />
-                <Button title="Send reset code" onPress={sendResetCode} disabled={busy} />
+                <Button title="Send reset link" onPress={sendResetCode} disabled={busy} />
               </>
             ) : (
               <>
                 <Text style={styles.muted}>
-                  If an account exists for {email.trim()}, a code is on its way. Check spam too. Enter it below with
-                  your new password.
+                  If an account exists for {email.trim()}, an email is on its way (check spam too). Tap the link in it,
+                  choose a new password on the page that opens, then come back here and sign in.
                 </Text>
+                <Button title="I’ve set it — sign in" onPress={() => setMode('signin')} />
+                <Button title="Send the email again" variant="ghost" onPress={sendResetCode} disabled={busy} />
+                {!showCode ? (
+                  <Text
+                    onPress={() => setShowCode(true)}
+                    accessibilityRole="button"
+                    style={{ color: colors.primary, textAlign: 'center', paddingVertical: 4 }}
+                  >
+                    Got a code instead?
+                  </Text>
+                ) : null}
+              </>
+            )}
+            {resetStep === 'code' && showCode ? (
+              <>
                 <Field
                   label="Code from the email"
                   value={code}
@@ -126,9 +151,8 @@ export default function LoginScreen() {
                   autoComplete="new-password"
                 />
                 <Button title="Set new password" onPress={setPasswordWithCode} disabled={busy} />
-                <Button title="Send a new code" variant="ghost" onPress={sendResetCode} disabled={busy} />
               </>
-            )}
+            ) : null}
             <Button title="Back to sign in" variant="ghost" onPress={() => setMode('signin')} />
           </Card>
         </ScrollView>
@@ -172,9 +196,7 @@ export default function LoginScreen() {
             </Text>
           ) : null}
         </Card>
-        <Text style={styles.muted}>
-          Expenses already on this phone are uploaded to your account after you sign in.
-        </Text>
+        <Text style={styles.muted}>Expenses already on this phone are uploaded to your account after you sign in.</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

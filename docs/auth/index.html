@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Expense Tracker account</title>
+    <style>
+      :root {
+        --bg: #f5f6fa;
+        --card: #ffffff;
+        --text: #1c1c28;
+        --muted: #6b7080;
+        --border: #e3e5ec;
+        --primary: #4f46e5;
+        --danger: #dc2626;
+        --success: #059669;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #121218;
+          --card: #1c1c26;
+          --text: #f2f2f7;
+          --muted: #a0a3b1;
+          --border: #2e2e3a;
+          --primary: #8b85ff;
+          --danger: #f87171;
+          --success: #34d399;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      main { max-width: 420px; margin: 0 auto; padding: 32px 16px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 20px;
+      }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      p { margin: 0 0 12px; color: var(--muted); }
+      label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin: 12px 0 6px; }
+      input {
+        width: 100%;
+        padding: 12px;
+        font-size: 16px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--card);
+        color: var(--text);
+      }
+      button {
+        width: 100%;
+        margin-top: 16px;
+        padding: 12px;
+        font-size: 16px;
+        font-weight: 600;
+        border: 0;
+        border-radius: 10px;
+        background: var(--primary);
+        color: #fff;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; }
+      .error { color: var(--danger); }
+      .ok { color: var(--success); font-weight: 600; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <h1 id="title">Expense Tracker</h1>
+        <p id="message">Checking your link…</p>
+
+        <form id="reset" hidden>
+          <label for="pw">New password</label>
+          <input id="pw" type="password" autocomplete="new-password" minlength="6" required />
+          <label for="pw2">Confirm new password</label>
+          <input id="pw2" type="password" autocomplete="new-password" minlength="6" required />
+          <p id="formError" class="error" hidden></p>
+          <button id="save" type="submit">Set new password</button>
+        </form>
+      </div>
+    </main>
+
+    <!-- Supabase project URL and publishable key (public by design, like in the app). -->
+    <script src="config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js"></script>
+    <script>
+      // Handles the links in Supabase's emails:
+      //  - "Reset password": #...&type=recovery -> choose a new password here
+      //  - "Confirm signup": #...&type=signup -> tell the person they can sign in
+      //  - expired / used links: #error=...&error_description=...
+      const title = document.getElementById('title');
+      const message = document.getElementById('message');
+      const form = document.getElementById('reset');
+      const formError = document.getElementById('formError');
+      const save = document.getElementById('save');
+
+      const show = (heading, text, cls) => {
+        title.textContent = heading;
+        message.textContent = text;
+        message.className = cls || '';
+      };
+
+      // Read the link's parameters before the Supabase library clears them from the address bar.
+      const hash = new URLSearchParams(location.hash.slice(1));
+      const query = new URLSearchParams(location.search);
+      const linkType = hash.get('type') || query.get('type');
+      const linkError = hash.get('error_description') || query.get('error_description');
+
+      const config = window.EXPENSE_TRACKER_CONFIG || {};
+      if (linkError) {
+        show(
+          'This link didn’t work',
+          linkError.replace(/\+/g, ' ') + '. Links expire and work only once: request a new one from the app.',
+          'error',
+        );
+      } else if (!linkType) {
+        show('Expense Tracker', 'This page finishes sign-up and password reset for the Expense Tracker app. Open it from the link in your email.');
+      } else if (!config.supabaseUrl || !config.supabaseKey || /PASTE/.test(config.supabaseKey)) {
+        show('Not set up yet', 'docs/auth/config.js needs the Supabase URL and publishable key.', 'error');
+      } else {
+        const client = window.supabase.createClient(config.supabaseUrl, config.supabaseKey, {
+          auth: { detectSessionInUrl: true, persistSession: false, flowType: 'implicit' },
+        });
+        let handled = false;
+        client.auth.onAuthStateChange((event) => {
+          if (handled) return;
+          if (event === 'PASSWORD_RECOVERY') {
+            handled = true;
+            show('Choose a new password', 'Use at least 6 characters.');
+            form.hidden = false;
+            document.getElementById('pw').focus();
+          } else if (event === 'SIGNED_IN' && linkType !== 'recovery') {
+            handled = true;
+            show('Email confirmed', 'You can close this page, go back to the Expense Tracker app and sign in.', 'ok');
+            client.auth.signOut();
+          }
+        });
+        // If the link was already used or is invalid, no session arrives.
+        setTimeout(() => {
+          if (!handled) show('This link didn’t work', 'It may have expired or already been used. Request a new one from the app.', 'error');
+        }, 8000);
+
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const pw = document.getElementById('pw').value;
+          const pw2 = document.getElementById('pw2').value;
+          formError.hidden = true;
+          if (pw.length < 6) {
+            formError.textContent = 'Use at least 6 characters.';
+            formError.hidden = false;
+            return;
+          }
+          if (pw !== pw2) {
+            formError.textContent = 'The passwords don’t match.';
+            formError.hidden = false;
+            return;
+          }
+          save.disabled = true;
+          const { error } = await client.auth.updateUser({ password: pw });
+          save.disabled = false;
+          if (error) {
+            formError.textContent = 'Could not set the password: ' + error.message;
+            formError.hidden = false;
+            return;
+          }
+          form.hidden = true;
+          show('Password changed', 'Go back to the Expense Tracker app and sign in with your new password.', 'ok');
+          client.auth.signOut();
+        });
+      }
+    </script>
+  </body>
+</html>

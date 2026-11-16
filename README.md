@@ -46,25 +46,19 @@ By default Supabase asks new users to confirm their email. Click the link in the
 
 The anon key is designed to be used in apps. Your data is protected by the row-level security policies in `schema.sql`. Keep `.env` out of git anyway; it's already in `.gitignore`.
 
-### Forgot password
+### Forgot password and email confirmation
 
-**Settings → Sign in → Forgot password?** emails a code. You type it into the app together with a new password, and you're signed in. A code is used rather than a link because a link can't reliably reopen the app (especially inside Expo Go).
+**Settings → Sign in → Forgot password?** sends Supabase's standard reset email. Its link opens a small web page, `docs/auth/index.html`, hosted free on GitHub Pages. There you choose a new password, then sign in to the app with it. The same page handles the "confirm your sign-up" link, which otherwise opened a broken `localhost:3000` page. No custom email (SMTP) setup is needed.
 
-Supabase's standard reset email only contains a link, so add the code to it once:
+One-time setup:
 
-1. Supabase → **Authentication** → **Emails** (email templates) → **Reset Password**.
-2. Replace the body with, for example:
+1. **Turn on GitHub Pages:** GitHub → this repository → **Settings → Pages** → Source **Deploy from a branch**, branch **main**, folder **/docs** → **Save**. After a minute the page is at `https://<your-github-username>.github.io/expense-tracker/auth/`.
+2. **Add your publishable key** to `docs/auth/config.js`: replace `PASTE_YOUR_PUBLISHABLE_KEY_HERE` with the same key as in `.env`. This is the publishable / anon key only, never the secret key; it's public by design, the same as in the app. Commit and push, or edit the file on GitHub.
+3. **Point Supabase's links at the page:** Supabase → **Authentication → URL Configuration** → set **Site URL** to `https://<your-github-username>.github.io/expense-tracker/auth/` → **Save**.
 
-   ```html
-   <h2>Reset your password</h2>
-   <p>Your code for the Expense Tracker app is:</p>
-   <p style="font-size:24px;font-weight:bold;letter-spacing:4px">{{ .Token }}</p>
-   <p>It expires soon. If you didn't ask for this, ignore this email.</p>
-   ```
+Links in these emails expire and work only once. If one fails, request a new one from the app. Supabase's built-in email service sends only a few emails per hour.
 
-3. Click **Save**.
-
-`{{ .Token }}` is the code; leave out `{{ .ConfirmationURL }}`. Supabase's built-in email service only sends a few emails per hour, so if a code doesn't arrive, wait a little before tapping **Send a new code**.
+If you later set up custom SMTP, you can also put the code in the email (`{{ .Token }}` in the **Reset Password** template) and type it in the app under **Got a code instead?**.
 
 ### How sync works
 
