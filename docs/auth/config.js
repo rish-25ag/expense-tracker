@@ -3,5 +3,5 @@
 // Use the publishable / anon key only — never the secret or service_role key.
 window.EXPENSE_TRACKER_CONFIG = {
   supabaseUrl: 'https://xfmmelgumokcqvgbjorp.supabase.co',
-  supabaseKey: 'GxAHYBaGb8WHuE-YHPw7kSktKRddTWTEuWJozmn-',
+  supabaseKey: 'PASTE_YOUR_PUBLISHABLE_KEY_HERE',
 };
