@@ -66,6 +66,16 @@ const MIGRATIONS: string[] = [
     last4 TEXT NOT NULL,${SYNC_COLS}
   );
   `,
+  // v3: sharing with friends who have an account. shared_dirty = changed here and not yet
+  // pushed to the shared tables (kept apart from dirty so pulled changes don't bounce back).
+  `
+  ALTER TABLE people ADD COLUMN user_id TEXT;
+  ALTER TABLE people ADD COLUMN email TEXT;
+  ALTER TABLE expenses ADD COLUMN shared INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE expenses ADD COLUMN shared_dirty INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE settlements ADD COLUMN shared INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE settlements ADD COLUMN shared_dirty INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** Fixed ids so two phones seeding defaults don't create duplicates after syncing. */

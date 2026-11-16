@@ -28,11 +28,16 @@ export interface Expense {
   paidBy: string; // ME or a Person id
   /** Empty = not split, the whole amount is mine. */
   shares: Share[];
+  /** Shared with friends who have an account: it also appears (and can be edited) in their app. */
+  shared?: boolean;
 }
 
 export interface Person {
   id: string;
   name: string;
+  /** The friend's account id when linked by email (shared expenses then appear in their app). */
+  userId?: string | null;
+  email?: string | null;
 }
 
 /** A bank account or credit card, detected from imported statements. */
@@ -59,4 +64,6 @@ export interface Settlement {
   direction: 'paid' | 'received';
   date: string;
   note: string;
+  /** Recorded with a friend who has an account, so it also shows in their app. */
+  shared?: boolean;
 }

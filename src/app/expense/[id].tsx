@@ -18,6 +18,7 @@ import { formatINR, parseAmount, round2, splitEqually } from '../../lib/money';
 import { monthOf, today } from '../../lib/dates';
 import { validateShares } from '../../lib/split';
 import { ME, type EntryType, type Share } from '../../lib/types';
+import { externalName, involvesAccounts, isExternal } from '../../lib/sharing';
 import { Button, Card, Chip, DateField, Field, colors, styles } from '../../components/ui';
 
 type SplitMode = 'equal' | 'custom';
@@ -78,7 +79,11 @@ export default function ExpenseEditor() {
 
   const amount = parseAmount(amountText);
   const participants = [ME, ...withIds];
-  const nameOf = (pid: string) => (pid === ME ? 'You' : (people.find((p) => p.id === pid)?.name ?? '?'));
+  const peopleById = useMemo(() => Object.fromEntries(people.map((p) => [p.id, p])), [people]);
+  const nameOf = (pid: string) =>
+    pid === ME ? 'You' : isExternal(pid) ? externalName(pid) : (peopleById[pid]?.name ?? '?');
+  // Friends with an account in this split: they'll see the expense in their app.
+  const linkedNames = withIds.filter((pid) => peopleById[pid]?.userId).map(nameOf);
 
   const shares: Share[] = useMemo(() => {
     if (!isSplit || withIds.length === 0) return [];
@@ -128,6 +133,7 @@ export default function ExpenseEditor() {
       date,
       paidBy: finalPaidBy,
       shares: isCredit ? [] : shares,
+      shared: !isCredit && shares.length > 0 && involvesAccounts(shares, finalPaidBy, peopleById),
     });
     changed();
 
@@ -231,7 +237,7 @@ export default function ExpenseEditor() {
                   {people.map((p) => (
                     <Chip
                       key={p.id}
-                      label={p.name}
+                      label={p.userId ? `🔗 ${p.name}` : p.name}
                       selected={withIds.includes(p.id)}
                       onPress={() => toggleWith(p.id)}
                     />
@@ -249,6 +255,12 @@ export default function ExpenseEditor() {
                   />
                   <Button title="Add" variant="secondary" onPress={addPerson} />
                 </View>
+
+                {linkedNames.length ? (
+                  <Text style={{ color: colors.primary }}>
+                    👥 {linkedNames.join(', ')} will see this expense in their app and can edit it.
+                  </Text>
+                ) : null}
 
                 {withIds.length ? (
                   <>

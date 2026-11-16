@@ -17,12 +17,15 @@ import { formatINR, parseAmount } from '../../lib/money';
 import { dayLabel, today } from '../../lib/dates';
 import { ME } from '../../lib/types';
 import { BalanceText } from '../../components/BalanceText';
+import { findAccount } from '../../lib/accounts';
 import { Button, Card, Empty, Field, SectionTitle, colors, styles } from '../../components/ui';
 
 export default function PersonScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const db = useSQLiteContext();
-  const { changed } = useApp();
+  const { changed, session } = useApp();
+  const [linkEmail, setLinkEmail] = useState('');
+  const [linking, setLinking] = useState(false);
   const navigation = useNavigation();
   const people = useQuery(listPeople, [], []);
   const expenses = useQuery((db) => listExpensesWithPerson(db, id), [id], []);
@@ -88,6 +91,8 @@ export default function PersonScreen() {
       direction: balance > 0 ? 'received' : 'paid',
       date: today(),
       note: '',
+      // With a linked friend, the settle-up also shows in their app.
+      shared: !!person.userId,
     });
     setSettleAmount('');
     changed();
@@ -159,24 +164,83 @@ export default function PersonScreen() {
       ) : (
         history.map((h) => (
           <Pressable key={h.key} onPress={h.onPress}>
-          <Card style={{ paddingVertical: 12 }}>
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 16 }}>{h.title}</Text>
-                <Text style={styles.muted}>
-                  {dayLabel(h.date)} · {h.sub}
+            <Card style={{ paddingVertical: 12 }}>
+              <View style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 16 }}>{h.title}</Text>
+                  <Text style={styles.muted}>
+                    {dayLabel(h.date)} · {h.sub}
+                  </Text>
+                </View>
+                <Text
+                  style={{
+                    fontWeight: '600',
+                    color: h.effect > 0 ? colors.success : h.effect < 0 ? colors.danger : colors.muted,
+                  }}
+                >
+                  {h.effect > 0 ? '+' : h.effect < 0 ? '−' : ''}
+                  {formatINR(Math.abs(h.effect))}
                 </Text>
               </View>
-              <Text style={{ fontWeight: '600', color: h.effect > 0 ? colors.success : h.effect < 0 ? colors.danger : colors.muted }}>
-                {h.effect > 0 ? '+' : h.effect < 0 ? '−' : ''}
-                {formatINR(Math.abs(h.effect))}
-              </Text>
-            </View>
-          </Card>
+            </Card>
           </Pressable>
         ))
       )}
       <Text style={styles.muted}>+ means it adds to what {person.name} owes you; − reduces it.</Text>
+
+      <SectionTitle>Account</SectionTitle>
+      <Card>
+        {person.userId ? (
+          <Text style={styles.muted}>
+            🔗 Linked to {person.name}’s account{person.email ? ` (${person.email})` : ''}. Expenses you split with them
+            and settle-ups show in their app too, and they can edit them.
+          </Text>
+        ) : (
+          <>
+            <Text style={styles.muted}>
+              Link {person.name} to their account to share expenses with them: they’ll see the ones you split with them
+              (and can edit them) in their own app.
+            </Text>
+            <Field
+              label="Their account email"
+              value={linkEmail}
+              onChangeText={setLinkEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              placeholder="friend@example.com"
+            />
+            <Button
+              title="Link account"
+              variant="secondary"
+              disabled={linking || !linkEmail.trim()}
+              onPress={async () => {
+                if (!session) return Alert.alert('Sign in first', 'Sign in (Settings) to link friends.');
+                setLinking(true);
+                try {
+                  const account = await findAccount(linkEmail);
+                  if (!account) {
+                    Alert.alert('No account with that email', 'Ask them to create an account in this app first.');
+                  } else if (account.id === session.user.id) {
+                    Alert.alert('That’s you', 'Enter your friend’s email.');
+                  } else {
+                    await savePerson(db, { id, name: person.name, userId: account.id, email: linkEmail });
+                    setLinkEmail('');
+                    changed();
+                    Alert.alert(
+                      'Linked',
+                      `New expenses you split with ${person.name} will show in their app. Existing ones stay on your phone only.`,
+                    );
+                  }
+                } catch (e) {
+                  Alert.alert('Could not look up the email', String(e instanceof Error ? e.message : e));
+                } finally {
+                  setLinking(false);
+                }
+              }}
+            />
+          </>
+        )}
+      </Card>
 
       <SectionTitle>Manage</SectionTitle>
       <Card>

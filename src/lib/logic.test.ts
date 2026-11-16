@@ -9,6 +9,7 @@ import { buildReview, type StatementTxn } from './statementReview.ts';
 import { supabaseHost, supabaseUrlProblem } from './supabaseUrl.ts';
 import { classify, detectAccount, detectHolder, holderVariants, parseStatementText, statementEndDate } from './statementParser.ts';
 import { daysElapsed, isLatest, periodContaining, periodLabel, selectedBucketIndex, shiftPeriod, trendBuckets } from './period.ts';
+import { fromSharedExpense, fromSharedSettlement, involvesAccounts, missingFriends, toSharedExpense, toSharedSettlement } from './sharing.ts';
 
 test('formatINR uses Indian digit grouping', () => {
   assert.equal(formatINR(1234567), '₹12,34,567');
@@ -466,4 +467,68 @@ test('periods: trend chart buckets', () => {
   assert.equal(selectedBucketIndex(year, trendBuckets(year), '2026-11-16'), 10); // Nov, not the empty December
   const lastYear = periodContaining('year', '2025-05-05');
   assert.equal(selectedBucketIndex(lastYear, trendBuckets(lastYear), '2026-11-16'), 11);
+});
+
+test('sharing: an expense round-trips between two accounts and balances agree', () => {
+  const A = { uid: 'uid-a', name: 'Asha' };
+  const B = { uid: 'uid-b', name: 'Bala' };
+  // Asha's phone: friend Bala (linked) and Chitra (no account).
+  const aPeople = { pb: { id: 'pb', name: 'Bala', userId: 'uid-b' }, pc: { id: 'pc', name: 'Chitra' } };
+  const shares = [
+    { personId: 'me', amount: 300 },
+    { personId: 'pb', amount: 300 },
+    { personId: 'pc', amount: 300 },
+  ];
+  assert.equal(involvesAccounts(shares, 'me', aPeople), true);
+  assert.equal(involvesAccounts([{ personId: 'me', amount: 1 }, { personId: 'pc', amount: 1 }], 'me', aPeople), false);
+
+  const row = toSharedExpense(
+    { id: 'e1', amount: 900, date: '2026-11-10', note: 'Dinner', paidBy: 'me', shares, updatedAt: 5, deleted: false },
+    'Food & Dining', A.uid, A, aPeople,
+  );
+  assert.deepEqual(row.member_ids, ['uid-a', 'uid-b']);
+  assert.deepEqual(row.paid_by, { uid: 'uid-a', name: 'Asha' });
+  assert.deepEqual(row.shares[2], { name: 'Chitra', amount: 300 });
+
+  // Bala's phone knows nobody yet: it must create Asha as a linked friend.
+  assert.deepEqual(missingFriends(row, B.uid, []), [{ uid: 'uid-a', name: 'Asha' }]);
+  const bPeople = [{ id: 'fa', name: 'Asha', userId: 'uid-a' }];
+  const bView = fromSharedExpense(row, B.uid, bPeople);
+  assert.deepEqual(bView, {
+    paidBy: 'fa',
+    shares: [
+      { personId: 'fa', amount: 300 },
+      { personId: 'me', amount: 300 },
+      { personId: 'ext:Chitra', amount: 300 },
+    ],
+  });
+  // Asha's balance with Bala = +300 (he owes her); Bala's with Asha = -300.
+  assert.deepEqual(balances([{ paidBy: 'me', shares }], [])['pb'], 300);
+  assert.deepEqual(balances([bView], [])['fa'], -300);
+
+  // Bala edits it on his phone (amount 1200); Asha's phone reads it back in her terms.
+  const edited = toSharedExpense(
+    { id: 'e1', amount: 1200, date: '2026-11-10', note: 'Dinner + dessert', paidBy: bView.paidBy, updatedAt: 9, deleted: false,
+      shares: bView.shares.map((s) => ({ ...s, amount: 400 })) },
+    null, row.created_by, B, Object.fromEntries(bPeople.map((p) => [p.id, p])),
+  );
+  assert.deepEqual(edited.member_ids, ['uid-a', 'uid-b']);
+  assert.equal(edited.created_by, 'uid-a');
+  const aView = fromSharedExpense(edited, A.uid, Object.values(aPeople));
+  assert.equal(aView.paidBy, 'me');
+  // Original order kept, and name-only Chitra maps back to Asha's own friend Chitra.
+  assert.deepEqual(aView.shares.map((s) => s.personId), ['me', 'pb', 'pc']);
+  assert.deepEqual(balances([aView], [])['pb'], 400);
+});
+
+test('sharing: settle-ups flip direction for the other person', () => {
+  const row = toSharedSettlement(
+    { id: 's1', amount: 300, date: '2026-11-11', note: '', direction: 'received', updatedAt: 1, deleted: false },
+    { uid: 'uid-b', name: 'Bala' }, 'uid-a', { uid: 'uid-a', name: 'Asha' },
+  );
+  assert.equal(row.from_uid, 'uid-b'); // Bala paid
+  assert.equal(row.to_uid, 'uid-a');
+  assert.deepEqual(fromSharedSettlement(row, 'uid-a'), { friendUid: 'uid-b', friendName: 'Bala', direction: 'received' });
+  assert.deepEqual(fromSharedSettlement(row, 'uid-b'), { friendUid: 'uid-a', friendName: 'Asha', direction: 'paid' });
+  assert.equal(fromSharedSettlement(row, 'uid-x'), null);
 });

@@ -8,6 +8,8 @@ Amounts are in Indian Rupees (₹) with Indian digit grouping (₹1,23,456).
 - **Budgets**: a monthly limit per category, with a progress bar and a warning when an expense takes you past 80% or over the limit.
 - **Split**: split a bill with friends added by name (equally or by custom amounts), track who owes whom, settle up fully or partly, and share a reminder on WhatsApp or anywhere else. Your friends don't need the app.
 - **Statement PDF import**: pick a bank or credit card statement PDF (password-protected ones too). The app reads the transactions and the card / account they belong to, and you review them before adding. Free: no AI or paid service is used.
+- **Shared expenses with friends' accounts (like Splitwise)**: link a friend by their account email; expenses you split with them and settle-ups appear in their app, from their side, and either of you can edit them.
+- **Periods**: Expenses and Insights switch between week, month, year or any from–to range; each day in the list shows its total.
 - **Credits & accounts**: refunds, cashback and money received are saved as credit entries, shown separately and never counted as spending. Each imported entry is tagged with its card or account (e.g. "Axis Card ••1234"), and the Expenses screen can be filtered by account.
 - **CSV**: export everything to CSV, or import from this app's CSV or a bank statement.
 - **Offline-first + cloud backup**: data lives in SQLite on the phone, so the app works without internet. Sign in and it syncs with your own Supabase project, so nothing is lost if you change phones.
@@ -66,6 +68,29 @@ If you later set up custom SMTP, you can also put the code in the email (`{{ .To
 - If the same item was edited on two devices, the most recent edit wins (on the phone and on the server).
 - Deletes sync too: rows are marked deleted rather than removed.
 - Signing out removes the data from that phone. It comes back from the cloud when you sign in again. If any changes haven't synced yet, the app warns you first.
+
+## Sharing expenses with friends who have an account
+
+Like Splitwise: when you split an expense with a friend who has an account in **this app**, it also appears in their app. It shows from their side (who paid, what they owe), and either of you can edit or delete it. Settle-ups you record with them show for both of you too.
+
+**Set up (once):** run the updated `supabase/schema.sql` in Supabase → **SQL Editor** (safe to re-run; it only adds the sharing tables and rules). Then in the app, **Settings → Your name for friends** sets the name your friends see.
+
+**Linking a friend:**
+- **Split → Add a friend:** enter their name and their **account email**, then tap **Find and add**. A 🔗 shows next to linked friends.
+- For an existing friend, open them on the Split tab → **Account → Link account**.
+- They need to have signed up in this app first.
+
+**How it works:**
+- When you add an expense split with a linked friend, the editor says "👥 *Name* will see this expense in their app and can edit it." It syncs to them with the next sync, and shows 👥 in your list.
+- The friend's app adds you as a linked friend automatically, and shows the expense with their own share and balance.
+- Each person keeps their own category and card tag on a shared expense. Amount, date, note, who paid and the split are shared.
+- Friends without an account can be in the same split. They appear by name in the other person's app and aren't sent anything.
+- Only new expenses (and edits after linking) are shared. Existing ones stay on your phone.
+- Privacy: shared expenses are visible only to the accounts in them, enforced by the database. Looking someone up needs their exact email and returns only their name.
+
+**Your friends need the app itself,** connected to your Supabase project:
+- **Android:** share the APK from "Alternative: an installable Android app" below.
+- **iPhone:** Expo Go previews of your updates are tied to your Expo account, so iPhone friends need an installable build (Apple Developer account).
 
 ## Statement PDF import
 

@@ -8,6 +8,7 @@ import { formatINR, round2 } from '../../lib/money';
 import { dayLabel, today } from '../../lib/dates';
 import { periodContaining, periodLabel, type Period } from '../../lib/period';
 import { ME, type Expense } from '../../lib/types';
+import { externalName, isExternal } from '../../lib/sharing';
 import { Card, Chip, Empty, ProgressBar, colors, styles } from '../../components/ui';
 import { PeriodSwitcher } from '../../components/PeriodSwitcher';
 
@@ -153,7 +154,8 @@ export default function ExpensesScreen() {
           const cat = e.categoryId ? catById[e.categoryId] : undefined;
           const split = e.shares.length > 0;
           const mine = myShare(e);
-          const payer = e.paidBy === ME ? 'You' : (nameById[e.paidBy] ?? 'Someone');
+          const payer =
+            e.paidBy === ME ? 'You' : isExternal(e.paidBy) ? externalName(e.paidBy) : (nameById[e.paidBy] ?? 'Someone');
           const isCredit = e.type === 'credit';
           return (
             <Pressable onPress={() => router.push(`/expense/${e.id}`)}>
@@ -178,6 +180,7 @@ export default function ExpensesScreen() {
                     <Text style={styles.muted} numberOfLines={1}>
                       {isCredit ? 'Credit' : (cat?.name ?? 'Uncategorised')}
                       {split ? ` · split ${e.shares.length} ways · ${payer} paid` : ''}
+                      {e.shared ? ' · 👥' : ''}
                       {e.accountId && !accountId ? ` · ${acctById[e.accountId]?.name ?? ''}` : ''}
                     </Text>
                   </View>

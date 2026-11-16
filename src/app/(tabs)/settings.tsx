@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useApp } from '../../lib/store';
 import { supabase, SUPABASE_HOST, SUPABASE_URL_PROBLEM } from '../../lib/supabase';
 import { exportCSV, importCSV } from '../../lib/csvIO';
-import { Button, Card, SectionTitle, colors, styles } from '../../components/ui';
+import { Button, Card, Field, SectionTitle, colors, styles } from '../../components/ui';
+import { getMyName, setMyName } from '../../lib/accounts';
 
 function ago(iso: string | null) {
   if (!iso) return 'never';
@@ -20,6 +21,27 @@ export default function SettingsScreen() {
   const db = useSQLiteContext();
   const { session, syncState, syncError, lastSyncedAt, unsynced, sync, signOut, changed } = useApp();
   const [busy, setBusy] = useState(false);
+  // The name friends see on expenses you share with them.
+  const [myName, setMyNameText] = useState('');
+  const [savedName, setSavedName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!session) return;
+    getMyName()
+      .then((n) => {
+        setSavedName(n);
+        setMyNameText(n ?? '');
+      })
+      .catch(() => {});
+  }, [session?.user.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saveName = async () => {
+    try {
+      await setMyName(myName);
+      setSavedName(myName.trim());
+      Alert.alert('Saved', 'Friends will see this name on expenses you share.');
+    } catch (e) {
+      Alert.alert('Could not save your name', String(e instanceof Error ? e.message : e));
+    }
+  };
 
   const doExport = async () => {
     try {
@@ -94,6 +116,10 @@ export default function SettingsScreen() {
               <Text style={{ color: colors.danger }}>Sync failed: {syncError}</Text>
             ) : null}
             <Button title="Sync now" variant="secondary" onPress={sync} disabled={syncState === 'syncing'} />
+            <Field label="Your name for friends" value={myName} onChangeText={setMyNameText} placeholder="e.g. Asha" />
+            {myName.trim() && myName.trim() !== savedName ? (
+              <Button title="Save name" variant="secondary" onPress={saveName} />
+            ) : null}
             <Button title="Sign out" variant="ghost" onPress={confirmSignOut} />
           </>
         ) : (

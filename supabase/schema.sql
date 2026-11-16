@@ -113,3 +113,130 @@ begin
       t || '_pull_idx', t);
   end loop;
 end $$;
+
+-- =====================================================================
+-- v3: sharing expenses with friends who have an account (Splitwise-style).
+-- Safe to run on an existing project; it only adds.
+-- =====================================================================
+
+-- Personal tables: remember which friends are linked to an account, and which
+-- expenses / settle-ups are shared.
+alter table public.people add column if not exists user_id text;
+alter table public.people add column if not exists email text;
+alter table public.expenses add column if not exists shared smallint not null default 0;
+alter table public.settlements add column if not exists shared smallint not null default 0;
+
+-- Profiles: the name your friends see. Created automatically for every account.
+create table if not exists public.profiles (
+  id uuid primary key references auth.users on delete cascade,
+  email text not null,
+  name text not null,
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists profiles_email_idx on public.profiles (lower(email));
+alter table public.profiles enable row level security;
+drop policy if exists "read own profile" on public.profiles;
+create policy "read own profile" on public.profiles for select to authenticated using (id = (select auth.uid()));
+drop policy if exists "update own profile" on public.profiles;
+create policy "update own profile" on public.profiles for update to authenticated
+  using (id = (select auth.uid())) with check (id = (select auth.uid()));
+
+create or replace function public.create_profile() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, email, name)
+  values (new.id, lower(new.email), split_part(new.email, '@', 1))
+  on conflict (id) do nothing;
+  return new;
+end $$;
+drop trigger if exists create_profile on auth.users;
+create trigger create_profile after insert on auth.users for each row execute function public.create_profile();
+-- Accounts that existed before this ran.
+insert into public.profiles (id, email, name)
+select id, lower(email), split_part(email, '@', 1) from auth.users where email is not null
+on conflict (id) do nothing;
+
+-- Find a friend's account by exact email. Returns nothing for unknown emails and
+-- never lists other users.
+create or replace function public.find_account(p_email text)
+returns table (id uuid, name text)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.name from public.profiles p
+  where p.email = lower(trim(p_email)) and p.id <> auth.uid()
+  limit 1
+$$;
+revoke all on function public.find_account(text) from public, anon;
+grant execute on function public.find_account(text) to authenticated;
+
+-- Shared expenses and settle-ups. Every person in them who has an account is a
+-- member and can see and edit them; nobody else can.
+create table if not exists public.shared_expenses (
+  id text primary key,
+  created_by uuid not null default auth.uid() references auth.users on delete cascade,
+  member_ids uuid[] not null,
+  amount numeric(12,2) not null,
+  date date not null,
+  note text not null default '',
+  category text,
+  paid_by jsonb not null,
+  shares jsonb not null,
+  updated_at bigint not null,
+  deleted boolean not null default false,
+  server_updated_at timestamptz not null default now()
+);
+
+create table if not exists public.shared_settlements (
+  id text primary key,
+  created_by uuid not null default auth.uid() references auth.users on delete cascade,
+  member_ids uuid[] not null,
+  from_uid uuid not null,
+  to_uid uuid not null,
+  from_name text not null default '',
+  to_name text not null default '',
+  amount numeric(12,2) not null,
+  date date not null,
+  note text not null default '',
+  updated_at bigint not null,
+  deleted boolean not null default false,
+  server_updated_at timestamptz not null default now()
+);
+
+-- created_by is always the account that first saved the row and can't be changed
+-- later; stale edits are ignored (last write wins), like the personal tables.
+create or replace function public.shared_stamp() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'INSERT' then
+    new.created_by := coalesce(auth.uid(), new.created_by);
+  else
+    new.created_by := old.created_by;
+    if new.updated_at < old.updated_at then
+      return null;
+    end if;
+  end if;
+  new.server_updated_at := clock_timestamp();
+  return new;
+end $$;
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['shared_expenses', 'shared_settlements'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists "members read" on public.%I', t);
+    execute format('create policy "members read" on public.%I for select to authenticated
+       using ((select auth.uid()) = any(member_ids))', t);
+    execute format('drop policy if exists "members add" on public.%I', t);
+    execute format('create policy "members add" on public.%I for insert to authenticated
+       with check ((select auth.uid()) = any(member_ids))', t);
+    execute format('drop policy if exists "members edit" on public.%I', t);
+    execute format('create policy "members edit" on public.%I for update to authenticated
+       using ((select auth.uid()) = any(member_ids)) with check ((select auth.uid()) = any(member_ids))', t);
+    execute format('drop trigger if exists shared_stamp on public.%I', t);
+    execute format('create trigger shared_stamp before insert or update on public.%I
+       for each row execute function public.shared_stamp()', t);
+    execute format('create index if not exists %I on public.%I using gin (member_ids)', t || '_members_idx', t);
+    execute format('create index if not exists %I on public.%I (server_updated_at)', t || '_pull_idx', t);
+  end loop;
+end $$;

@@ -1,6 +1,16 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { randomUUID } from 'expo-crypto';
-import { ME, type Account, type Budget, type Category, type EntryType, type Expense, type Person, type Settlement, type Share } from '../lib/types';
+import {
+  ME,
+  type Account,
+  type Budget,
+  type Category,
+  type EntryType,
+  type Expense,
+  type Person,
+  type Settlement,
+  type Share,
+} from '../lib/types';
 import { myShare } from '../lib/split';
 import { round2 } from '../lib/money';
 
@@ -15,9 +25,7 @@ const now = () => Date.now();
 // ---------- Categories ----------
 
 export async function listCategories(db: SQLiteDatabase): Promise<Category[]> {
-  return db.getAllAsync<Category>(
-    'SELECT id, name, icon, color FROM categories WHERE deleted = 0 ORDER BY sort, name',
-  );
+  return db.getAllAsync<Category>('SELECT id, name, icon, color FROM categories WHERE deleted = 0 ORDER BY sort, name');
 }
 
 export async function saveCategory(db: SQLiteDatabase, c: Omit<Category, 'id'> & { id?: string }) {
@@ -30,7 +38,12 @@ export async function saveCategory(db: SQLiteDatabase, c: Omit<Category, 'id'> &
      VALUES (?, ?, ?, ?, ?, ?, 0, 1)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, color = excluded.color,
        updated_at = excluded.updated_at, deleted = 0, dirty = 1`,
-    id, c.name.trim(), c.icon, c.color, sort ?? 0, now(),
+    id,
+    c.name.trim(),
+    c.icon,
+    c.color,
+    sort ?? 0,
+    now(),
   );
   return id;
 }
@@ -52,11 +65,13 @@ export async function deleteCategory(db: SQLiteDatabase, id: string) {
     await db.runAsync('UPDATE categories SET deleted = 1, dirty = 1, updated_at = ? WHERE id = ?', t, id);
     await db.runAsync(
       'UPDATE expenses SET category_id = NULL, dirty = 1, updated_at = ? WHERE category_id = ? AND deleted = 0',
-      t, id,
+      t,
+      id,
     );
     await db.runAsync(
       'UPDATE budgets SET deleted = 1, dirty = 1, updated_at = ? WHERE category_id = ? AND deleted = 0',
-      t, id,
+      t,
+      id,
     );
   });
 }
@@ -73,6 +88,7 @@ interface ExpenseRow {
   shares: string;
   type: EntryType;
   account_id: string | null;
+  shared: number;
 }
 
 const toExpense = (r: ExpenseRow): Expense => ({
@@ -85,9 +101,10 @@ const toExpense = (r: ExpenseRow): Expense => ({
   date: r.date,
   paidBy: r.paid_by,
   shares: JSON.parse(r.shares) as Share[],
+  shared: r.shared === 1,
 });
 
-const EXPENSE_COLS = 'id, amount, category_id, note, date, paid_by, shares, type, account_id';
+const EXPENSE_COLS = 'id, amount, category_id, note, date, paid_by, shares, type, account_id, shared';
 
 /** month = 'YYYY-MM'; omit for all expenses. Newest first. */
 export async function listExpenses(db: SQLiteDatabase, month?: string): Promise<Expense[]> {
@@ -108,13 +125,18 @@ export async function listExpensesBetween(db: SQLiteDatabase, start: string, end
   const rows = await db.getAllAsync<ExpenseRow>(
     `SELECT ${EXPENSE_COLS} FROM expenses WHERE deleted = 0 AND date >= ? AND date <= ?
      ORDER BY date DESC, updated_at DESC`,
-    start, end,
+    start,
+    end,
   );
   return rows.map(toExpense);
 }
 
 /** Spend per category from `start` to `end`, counting only my share of split bills (credits excluded). */
-export async function spendByCategoryBetween(db: SQLiteDatabase, start: string, end: string): Promise<Record<string, number>> {
+export async function spendByCategoryBetween(
+  db: SQLiteDatabase,
+  start: string,
+  end: string,
+): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   for (const e of await listExpensesBetween(db, start, end)) {
     if (e.type !== 'expense') continue;
@@ -141,10 +163,7 @@ export async function spendByRanges(
 }
 
 export async function getExpense(db: SQLiteDatabase, id: string): Promise<Expense | null> {
-  const r = await db.getFirstAsync<ExpenseRow>(
-    `SELECT ${EXPENSE_COLS} FROM expenses WHERE id = ? AND deleted = 0`,
-    id,
-  );
+  const r = await db.getFirstAsync<ExpenseRow>(`SELECT ${EXPENSE_COLS} FROM expenses WHERE id = ? AND deleted = 0`, id);
   return r ? toExpense(r) : null;
 }
 
@@ -152,7 +171,8 @@ export async function listExpensesWithPerson(db: SQLiteDatabase, personId: strin
   const all = await db.getAllAsync<ExpenseRow>(
     `SELECT ${EXPENSE_COLS} FROM expenses WHERE deleted = 0 AND shares != '[]'
      AND (paid_by = ? OR shares LIKE ?) ORDER BY date DESC`,
-    personId, `%"${personId}"%`,
+    personId,
+    `%"${personId}"%`,
   );
   return all.map(toExpense).filter((e) => e.paidBy === personId || e.shares.some((s) => s.personId === personId));
 }
@@ -165,25 +185,46 @@ export async function listSplitExpenses(db: SQLiteDatabase): Promise<Expense[]> 
   return rows.map(toExpense);
 }
 
+/**
+ * Saves an expense. `shared: true` (split with a friend who has an account) also queues it
+ * for the shared tables; once shared, an expense stays shared so edits reach everyone.
+ */
 export async function saveExpense(db: SQLiteDatabase, e: Omit<Expense, 'id'> & { id?: string }) {
   const id = e.id ?? newId();
+  const shared = e.shared && e.type !== 'credit' ? 1 : 0;
   await db.runAsync(
-    `INSERT INTO expenses (id, amount, category_id, note, date, paid_by, shares, type, account_id, updated_at, deleted, dirty)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
+    `INSERT INTO expenses (id, amount, category_id, note, date, paid_by, shares, type, account_id, shared, shared_dirty,
+       updated_at, deleted, dirty)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
      ON CONFLICT(id) DO UPDATE SET amount = excluded.amount, category_id = excluded.category_id,
        note = excluded.note, date = excluded.date, paid_by = excluded.paid_by, shares = excluded.shares,
        type = excluded.type, account_id = excluded.account_id,
+       shared = MAX(expenses.shared, excluded.shared), shared_dirty = MAX(expenses.shared, excluded.shared),
        updated_at = excluded.updated_at, deleted = 0, dirty = 1`,
-    id, round2(e.amount), e.categoryId, e.note.trim(), e.date,
+    id,
+    round2(e.amount),
+    e.categoryId,
+    e.note.trim(),
+    e.date,
     // Credits are never split.
-    e.type === 'credit' ? ME : e.paidBy, JSON.stringify(e.type === 'credit' ? [] : e.shares),
-    e.type, e.accountId, now(),
+    e.type === 'credit' ? ME : e.paidBy,
+    JSON.stringify(e.type === 'credit' ? [] : e.shares),
+    e.type,
+    e.accountId,
+    shared,
+    shared,
+    now(),
   );
   return id;
 }
 
 export async function deleteExpense(db: SQLiteDatabase, id: string) {
-  await db.runAsync('UPDATE expenses SET deleted = 1, dirty = 1, updated_at = ? WHERE id = ?', now(), id);
+  // A shared expense is deleted for everyone it's shared with.
+  await db.runAsync(
+    'UPDATE expenses SET deleted = 1, dirty = 1, shared_dirty = shared, updated_at = ? WHERE id = ?',
+    now(),
+    id,
+  );
 }
 
 /** Spend per category for a month, counting only my share of split bills. */
@@ -225,24 +266,52 @@ export async function ensureAccount(db: SQLiteDatabase, a: Account) {
     `INSERT INTO accounts (id, name, bank, kind, last4, updated_at, deleted, dirty) VALUES (?, ?, ?, ?, ?, ?, 0, 1)
      ON CONFLICT(id) DO UPDATE SET deleted = 0, dirty = CASE WHEN accounts.deleted = 1 THEN 1 ELSE accounts.dirty END,
        updated_at = CASE WHEN accounts.deleted = 1 THEN excluded.updated_at ELSE accounts.updated_at END`,
-    a.id, a.name, a.bank, a.kind, a.last4, now(),
+    a.id,
+    a.name,
+    a.bank,
+    a.kind,
+    a.last4,
+    now(),
   );
 }
 
 // ---------- People ----------
 
 export async function listPeople(db: SQLiteDatabase): Promise<Person[]> {
-  return db.getAllAsync<Person>('SELECT id, name FROM people WHERE deleted = 0 ORDER BY name COLLATE NOCASE');
+  return db.getAllAsync<Person>(
+    'SELECT id, name, user_id AS userId, email FROM people WHERE deleted = 0 ORDER BY name COLLATE NOCASE',
+  );
 }
 
-export async function savePerson(db: SQLiteDatabase, p: { id?: string; name: string }) {
+/**
+ * Adds or renames a friend. `userId` / `email` link them to an account (shared expenses then
+ * appear in their app); leaving them out keeps an existing link.
+ */
+export async function savePerson(
+  db: SQLiteDatabase,
+  p: { id?: string; name: string; userId?: string | null; email?: string | null },
+) {
   const id = p.id ?? newId();
   await db.runAsync(
-    `INSERT INTO people (id, name, updated_at, deleted, dirty) VALUES (?, ?, ?, 0, 1)
-     ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at, deleted = 0, dirty = 1`,
-    id, p.name.trim(), now(),
+    `INSERT INTO people (id, name, user_id, email, updated_at, deleted, dirty) VALUES (?, ?, ?, ?, ?, 0, 1)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name,
+       user_id = COALESCE(excluded.user_id, people.user_id), email = COALESCE(excluded.email, people.email),
+       updated_at = excluded.updated_at, deleted = 0, dirty = 1`,
+    id,
+    p.name.trim(),
+    p.userId ?? null,
+    p.email?.trim().toLowerCase() || null,
+    now(),
   );
   return id;
+}
+
+/** The friend linked to an account, if any (also finds removed friends, so they can be restored). */
+export async function findPersonByUserId(db: SQLiteDatabase, userId: string): Promise<Person | null> {
+  return db.getFirstAsync<Person>(
+    'SELECT id, name, user_id AS userId, email FROM people WHERE user_id = ? ORDER BY deleted LIMIT 1',
+    userId,
+  );
 }
 
 export async function deletePerson(db: SQLiteDatabase, id: string) {
@@ -255,9 +324,7 @@ export async function deletePerson(db: SQLiteDatabase, id: string) {
 const budgetId = (categoryId: string) => `budget_${categoryId}`;
 
 export async function listBudgets(db: SQLiteDatabase): Promise<Budget[]> {
-  return db.getAllAsync<Budget>(
-    'SELECT id, category_id AS categoryId, amount FROM budgets WHERE deleted = 0',
-  );
+  return db.getAllAsync<Budget>('SELECT id, category_id AS categoryId, amount FROM budgets WHERE deleted = 0');
 }
 
 /** amount <= 0 removes the budget. */
@@ -266,28 +333,46 @@ export async function setBudget(db: SQLiteDatabase, categoryId: string, amount: 
     `INSERT INTO budgets (id, category_id, amount, updated_at, deleted, dirty) VALUES (?, ?, ?, ?, ?, 1)
      ON CONFLICT(id) DO UPDATE SET amount = excluded.amount, updated_at = excluded.updated_at,
        deleted = excluded.deleted, dirty = 1`,
-    budgetId(categoryId), categoryId, round2(Math.max(amount, 0)), now(), amount > 0 ? 0 : 1,
+    budgetId(categoryId),
+    categoryId,
+    round2(Math.max(amount, 0)),
+    now(),
+    amount > 0 ? 0 : 1,
   );
 }
 
 // ---------- Settlements ----------
 
 export async function listSettlements(db: SQLiteDatabase, personId?: string): Promise<Settlement[]> {
-  const sql = `SELECT id, person_id AS personId, amount, direction, date, note FROM settlements
+  const sql = `SELECT id, person_id AS personId, amount, direction, date, note, shared = 1 AS shared FROM settlements
                WHERE deleted = 0 ${personId ? 'AND person_id = ?' : ''} ORDER BY date DESC`;
   return personId ? db.getAllAsync<Settlement>(sql, personId) : db.getAllAsync<Settlement>(sql);
 }
 
+/** `shared: true` for a friend with an account: the settle-up then shows in their app too. */
 export async function addSettlement(db: SQLiteDatabase, s: Omit<Settlement, 'id'>) {
+  const shared = s.shared ? 1 : 0;
   await db.runAsync(
-    `INSERT INTO settlements (id, person_id, amount, direction, date, note, updated_at, deleted, dirty)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)`,
-    newId(), s.personId, round2(s.amount), s.direction, s.date, s.note.trim(), now(),
+    `INSERT INTO settlements (id, person_id, amount, direction, date, note, shared, shared_dirty, updated_at, deleted, dirty)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`,
+    newId(),
+    s.personId,
+    round2(s.amount),
+    s.direction,
+    s.date,
+    s.note.trim(),
+    shared,
+    shared,
+    now(),
   );
 }
 
 export async function deleteSettlement(db: SQLiteDatabase, id: string) {
-  await db.runAsync('UPDATE settlements SET deleted = 1, dirty = 1, updated_at = ? WHERE id = ?', now(), id);
+  await db.runAsync(
+    'UPDATE settlements SET deleted = 1, dirty = 1, shared_dirty = shared, updated_at = ? WHERE id = ?',
+    now(),
+    id,
+  );
 }
 
 // ---------- Meta ----------

@@ -2,6 +2,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SYNCED_TABLES, type SyncedTable } from './schema';
 import { getMeta, setMeta } from './repo';
+import { syncShared } from './sharedSync';
 
 /**
  * Offline-first sync with last-write-wins per row.
@@ -15,10 +16,10 @@ import { getMeta, setMeta } from './repo';
 const COLUMNS: Record<SyncedTable, string[]> = {
   categories: ['name', 'icon', 'color', 'sort'],
   accounts: ['name', 'bank', 'kind', 'last4'],
-  expenses: ['amount', 'category_id', 'note', 'date', 'paid_by', 'shares', 'type', 'account_id'],
-  people: ['name'],
+  expenses: ['amount', 'category_id', 'note', 'date', 'paid_by', 'shares', 'type', 'account_id', 'shared'],
+  people: ['name', 'user_id', 'email'],
   budgets: ['category_id', 'amount'],
-  settlements: ['person_id', 'amount', 'direction', 'date', 'note'],
+  settlements: ['person_id', 'amount', 'direction', 'date', 'note', 'shared'],
 };
 
 const PAGE = 500;
@@ -116,6 +117,10 @@ export function syncNow(db: SQLiteDatabase, sb: SupabaseClient): Promise<void> {
     running = (async () => {
       for (const t of SYNCED_TABLES) await pullTable(db, sb, t);
       for (const t of SYNCED_TABLES) await pushTable(db, sb, t);
+      // Expenses / settle-ups shared with friends who have an account, then push the
+      // personal copies those changes produced.
+      await syncShared(db, sb);
+      for (const t of SYNCED_TABLES) await pushTable(db, sb, t);
       await setMeta(db, 'last_synced_at', new Date().toISOString());
     })().finally(() => {
       running = null;
@@ -127,7 +132,8 @@ export function syncNow(db: SQLiteDatabase, sb: SupabaseClient): Promise<void> {
 export async function countUnsynced(db: SQLiteDatabase): Promise<number> {
   let n = 0;
   for (const t of SYNCED_TABLES) {
-    n += (await db.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM ${t} WHERE dirty = 1`))?.n ?? 0;
+    const sharedToo = t === 'expenses' || t === 'settlements' ? ' OR shared_dirty = 1' : '';
+    n += (await db.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM ${t} WHERE dirty = 1${sharedToo}`))?.n ?? 0;
   }
   return n;
 }
