@@ -121,7 +121,8 @@ end $$;
 
 -- Personal tables: remember which friends are linked to an account, and which
 -- expenses / settle-ups are shared.
-alter table public.people add column if not exists user_id text;
+-- (user_id is the row's owner; the friend's account goes in friend_uid.)
+alter table public.people add column if not exists friend_uid text;
 alter table public.people add column if not exists email text;
 alter table public.expenses add column if not exists shared smallint not null default 0;
 alter table public.settlements add column if not exists shared smallint not null default 0;

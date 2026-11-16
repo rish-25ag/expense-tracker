@@ -279,7 +279,7 @@ export async function ensureAccount(db: SQLiteDatabase, a: Account) {
 
 export async function listPeople(db: SQLiteDatabase): Promise<Person[]> {
   return db.getAllAsync<Person>(
-    'SELECT id, name, user_id AS userId, email FROM people WHERE deleted = 0 ORDER BY name COLLATE NOCASE',
+    'SELECT id, name, friend_uid AS userId, email FROM people WHERE deleted = 0 ORDER BY name COLLATE NOCASE',
   );
 }
 
@@ -293,9 +293,9 @@ export async function savePerson(
 ) {
   const id = p.id ?? newId();
   await db.runAsync(
-    `INSERT INTO people (id, name, user_id, email, updated_at, deleted, dirty) VALUES (?, ?, ?, ?, ?, 0, 1)
+    `INSERT INTO people (id, name, friend_uid, email, updated_at, deleted, dirty) VALUES (?, ?, ?, ?, ?, 0, 1)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name,
-       user_id = COALESCE(excluded.user_id, people.user_id), email = COALESCE(excluded.email, people.email),
+       friend_uid = COALESCE(excluded.friend_uid, people.friend_uid), email = COALESCE(excluded.email, people.email),
        updated_at = excluded.updated_at, deleted = 0, dirty = 1`,
     id,
     p.name.trim(),
@@ -309,7 +309,7 @@ export async function savePerson(
 /** The friend linked to an account, if any (also finds removed friends, so they can be restored). */
 export async function findPersonByUserId(db: SQLiteDatabase, userId: string): Promise<Person | null> {
   return db.getFirstAsync<Person>(
-    'SELECT id, name, user_id AS userId, email FROM people WHERE user_id = ? ORDER BY deleted LIMIT 1',
+    'SELECT id, name, friend_uid AS userId, email FROM people WHERE friend_uid = ? ORDER BY deleted LIMIT 1',
     userId,
   );
 }

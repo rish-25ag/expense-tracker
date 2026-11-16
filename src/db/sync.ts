@@ -17,7 +17,7 @@ const COLUMNS: Record<SyncedTable, string[]> = {
   categories: ['name', 'icon', 'color', 'sort'],
   accounts: ['name', 'bank', 'kind', 'last4'],
   expenses: ['amount', 'category_id', 'note', 'date', 'paid_by', 'shares', 'type', 'account_id', 'shared'],
-  people: ['name', 'user_id', 'email'],
+  people: ['name', 'friend_uid', 'email'],
   budgets: ['category_id', 'amount'],
   settlements: ['person_id', 'amount', 'direction', 'date', 'note', 'shared'],
 };

@@ -76,6 +76,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE settlements ADD COLUMN shared INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE settlements ADD COLUMN shared_dirty INTEGER NOT NULL DEFAULT 0;
   `,
+  // v4: the friend's account id must not be called user_id: on the server, user_id is the
+  // row's owner (checked by the access rules), so syncing it as the friend's id was refused.
+  `
+  ALTER TABLE people RENAME COLUMN user_id TO friend_uid;
+  `,
 ];
 
 /** Fixed ids so two phones seeding defaults don't create duplicates after syncing. */

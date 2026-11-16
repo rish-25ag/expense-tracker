@@ -40,7 +40,7 @@ async function whoAmI(sb: SupabaseClient): Promise<Me | null> {
 
 /** All friends, including removed ones (a shared row may still name them). */
 async function allPeople(db: SQLiteDatabase): Promise<Person[]> {
-  return db.getAllAsync<Person>('SELECT id, name, user_id AS userId, email FROM people');
+  return db.getAllAsync<Person>('SELECT id, name, friend_uid AS userId, email FROM people');
 }
 
 /** The local friend for an account, restoring or creating them if needed. */
@@ -228,16 +228,16 @@ async function pushSettlements(db: SQLiteDatabase, sb: SupabaseClient, me: Me) {
     note: string;
     updated_at: number;
     deleted: number;
-    user_id: string | null;
+    friend_uid: string | null;
     name: string;
   }>(
-    `SELECT s.id, s.amount, s.direction, s.date, s.note, s.updated_at, s.deleted, p.user_id, p.name
+    `SELECT s.id, s.amount, s.direction, s.date, s.note, s.updated_at, s.deleted, p.friend_uid, p.name
      FROM settlements s JOIN people p ON p.id = s.person_id
      WHERE s.shared = 1 AND s.shared_dirty = 1 LIMIT ${PAGE}`,
   );
   const rows: SharedSettlementRow[] = [];
   for (const s of pending) {
-    if (!s.user_id) {
+    if (!s.friend_uid) {
       await db.runAsync('UPDATE settlements SET shared = 0, shared_dirty = 0 WHERE id = ?', s.id);
       continue;
     }
@@ -252,7 +252,7 @@ async function pushSettlements(db: SQLiteDatabase, sb: SupabaseClient, me: Me) {
           updatedAt: s.updated_at,
           deleted: s.deleted === 1,
         },
-        { uid: s.user_id, name: s.name },
+        { uid: s.friend_uid, name: s.name },
         me.uid,
         me,
       ),
