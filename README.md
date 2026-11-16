@@ -46,6 +46,26 @@ By default Supabase asks new users to confirm their email. Click the link in the
 
 The anon key is designed to be used in apps. Your data is protected by the row-level security policies in `schema.sql`. Keep `.env` out of git anyway; it's already in `.gitignore`.
 
+### Forgot password
+
+**Settings → Sign in → Forgot password?** emails a code. You type it into the app together with a new password, and you're signed in. A code is used rather than a link because a link can't reliably reopen the app (especially inside Expo Go).
+
+Supabase's standard reset email only contains a link, so add the code to it once:
+
+1. Supabase → **Authentication** → **Emails** (email templates) → **Reset Password**.
+2. Replace the body with, for example:
+
+   ```html
+   <h2>Reset your password</h2>
+   <p>Your code for the Expense Tracker app is:</p>
+   <p style="font-size:24px;font-weight:bold;letter-spacing:4px">{{ .Token }}</p>
+   <p>It expires soon. If you didn't ask for this, ignore this email.</p>
+   ```
+
+3. Click **Save**.
+
+`{{ .Token }}` is the code; leave out `{{ .ConfirmationURL }}`. Supabase's built-in email service only sends a few emails per hour, so if a code doesn't arrive, wait a little before tapping **Send a new code**.
+
 ### How sync works
 
 - Every change is saved to SQLite first, then synced about 3 seconds later, when you open the app, and when you tap **Sync now**.

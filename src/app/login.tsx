@@ -2,13 +2,18 @@ import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { describeNetworkError, supabase, SUPABASE_URL_PROBLEM } from '../lib/supabase';
-import { Button, Card, Chip, Field, styles } from '../components/ui';
+import { Button, Card, Chip, Field, colors, styles } from '../components/ui';
 
 export default function LoginScreen() {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'reset'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  // Password reset: 'email' = ask for the email, 'code' = enter the emailed code and a new password.
+  const [resetStep, setResetStep] = useState<'email' | 'code'>('email');
+  const [code, setCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const sb = supabase;
   if (!sb) return null;
@@ -33,6 +38,103 @@ export default function LoginScreen() {
     }
     router.back(); // AppProvider picks up the session and syncs.
   };
+
+  const startReset = () => {
+    setMode('reset');
+    setResetStep('email');
+    setCode('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
+
+  const sendResetCode = async () => {
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) return Alert.alert('Enter your email', 'Use the email you signed up with.');
+    if (SUPABASE_URL_PROBLEM) return Alert.alert('Supabase is not set up correctly', SUPABASE_URL_PROBLEM);
+    setBusy(true);
+    const { error } = await sb.auth.resetPasswordForEmail(email.trim());
+    setBusy(false);
+    if (error) return Alert.alert('Could not send the code', describeNetworkError(error.message));
+    setResetStep('code');
+  };
+
+  const setPasswordWithCode = async () => {
+    const token = code.replace(/\s/g, '');
+    if (!/^\d{6,10}$/.test(token)) return Alert.alert('Check the code', 'Enter the code from the email (6 or more digits).');
+    if (newPassword.length < 6) return Alert.alert('Choose a longer password', 'Use at least 6 characters.');
+    if (newPassword !== confirmPassword) return Alert.alert('Passwords don’t match', 'Type the same new password twice.');
+    setBusy(true);
+    // The code signs you in with a recovery session, which is allowed to set a new password.
+    const verified = await sb.auth.verifyOtp({ email: email.trim(), token, type: 'recovery' });
+    if (verified.error) {
+      setBusy(false);
+      return Alert.alert('That code didn’t work', `${describeNetworkError(verified.error.message)}\n\nCodes expire after a while; you can send a new one.`);
+    }
+    const updated = await sb.auth.updateUser({ password: newPassword });
+    setBusy(false);
+    if (updated.error) return Alert.alert('Could not set the new password', describeNetworkError(updated.error.message));
+    Alert.alert('Password changed', 'You’re signed in with your new password.');
+    router.back(); // Signed in: AppProvider picks up the session and syncs.
+  };
+
+  if (mode === 'reset') {
+    return (
+      <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Card>
+            <Text style={{ fontSize: 16, fontWeight: '600' }}>Reset your password</Text>
+            {resetStep === 'email' ? (
+              <>
+                <Text style={styles.muted}>We’ll email you a code to set a new password.</Text>
+                <Field
+                  label="Email"
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  autoComplete="email"
+                  keyboardType="email-address"
+                  placeholder="you@example.com"
+                />
+                <Button title="Send reset code" onPress={sendResetCode} disabled={busy} />
+              </>
+            ) : (
+              <>
+                <Text style={styles.muted}>
+                  If an account exists for {email.trim()}, a code is on its way. Check spam too. Enter it below with
+                  your new password.
+                </Text>
+                <Field
+                  label="Code from the email"
+                  value={code}
+                  onChangeText={setCode}
+                  keyboardType="number-pad"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
+                />
+                <Field
+                  label="New password"
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                  secureTextEntry
+                  autoComplete="new-password"
+                  placeholder="At least 6 characters"
+                />
+                <Field
+                  label="Confirm new password"
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  secureTextEntry
+                  autoComplete="new-password"
+                />
+                <Button title="Set new password" onPress={setPasswordWithCode} disabled={busy} />
+                <Button title="Send a new code" variant="ghost" onPress={sendResetCode} disabled={busy} />
+              </>
+            )}
+            <Button title="Back to sign in" variant="ghost" onPress={() => setMode('signin')} />
+          </Card>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
 
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -60,6 +162,15 @@ export default function LoginScreen() {
             placeholder="At least 6 characters"
           />
           <Button title={mode === 'signin' ? 'Sign in' : 'Create account'} onPress={submit} disabled={busy} />
+          {mode === 'signin' ? (
+            <Text
+              onPress={startReset}
+              accessibilityRole="button"
+              style={{ color: colors.primary, textAlign: 'center', paddingVertical: 4 }}
+            >
+              Forgot password?
+            </Text>
+          ) : null}
         </Card>
         <Text style={styles.muted}>
           Expenses already on this phone are uploaded to your account after you sign in.
