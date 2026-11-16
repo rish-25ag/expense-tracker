@@ -57,7 +57,16 @@ export default function LoginScreen() {
     setBusy(true);
     const { error } = await sb.auth.resetPasswordForEmail(email.trim());
     setBusy(false);
-    if (error) return Alert.alert('Could not send the code', describeNetworkError(error.message));
+    if (error) {
+      // Supabase's built-in email service allows only a few emails per hour for the whole project.
+      if (error.status === 429 || /rate limit/i.test(error.message)) {
+        return Alert.alert(
+          'Too many emails for now',
+          'Supabase’s free email service sends only a few emails per hour. Check your inbox (and spam) for an earlier one — use the newest — or try again in about an hour.',
+        );
+      }
+      return Alert.alert('Could not send the email', describeNetworkError(error.message));
+    }
     setResetStep('code');
   };
 
